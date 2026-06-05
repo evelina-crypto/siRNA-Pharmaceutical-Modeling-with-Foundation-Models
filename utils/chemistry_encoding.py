@@ -62,7 +62,7 @@ class ChemistryEncoder:
         linker_matrix = np.zeros((self.target_len, len(self.linker_map)))
 
         # return the matrices as all zeros if there are NA values
-        if pd.isna(cell_value):
+        if pd.isna(cell_value) or not isinstance(cell_value, str):
             return acid_matrix, sugar_matrix, linker_matrix
 
         tokens = cell_value.split(" || ")
