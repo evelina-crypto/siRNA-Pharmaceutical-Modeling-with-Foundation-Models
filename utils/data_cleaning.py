@@ -35,14 +35,19 @@ class DataCleaner:
               f"cell {unwanted.sum()}, inhibition {out_of_range.sum()})")
         self.file = self.file[keep].copy()
 
+    def drop_invalid_sequences(self, max_len: int = 25):
+        """Drops rows where the sense or antisense strand is missing/empty or longer
+        than 25 nt. Length is computed from the sequence (the length_* column
+        is unreliable)"""
+        # valid strands are 1-25 nt
+        sense_len = self.file["Sense_seqence"].fillna("").str.replace(r"\s", "", regex=True).str.len()
+        anti_len = self.file["Antisense_seqence"].fillna("").str.replace(r"\s", "", regex=True).str.len()
+        invalid = ~sense_len.between(1, max_len) | ~anti_len.between(1, max_len)
+        print(f"dropped {invalid.sum()} rows with a missing or >{max_len} nt strand")
+        self.file = self.file[~invalid].copy()
+
     def clean(self):
         """Runs the quality control and returns the cleaned table."""
         self.drop_rows()
+        self.drop_invalid_sequences()
         return self.file
-
-
-if __name__ == "__main__":
-    df = pd.read_csv("data/CMsiRNA_data_update.tsv", sep="\t", low_memory=False)
-    clean_df = DataCleaner(df).clean()
-    print(clean_df["Cell_Type"].value_counts())
-    print(clean_df["Inhibition"].describe().round(1))
