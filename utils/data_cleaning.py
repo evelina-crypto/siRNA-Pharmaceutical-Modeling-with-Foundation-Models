@@ -12,13 +12,13 @@ class DataCleaner:
     def __init__(self, file: pd.DataFrame):
         self.file = file
 
-        # words that mark a whole animal (in vivo). primary cultures contain these
+        # words that mark a whole animal (in vivo), primary cultures contain these
         # words too, but are real in-vitro cells, so they are excluded separately
         self.animal_terms = ["mice", "mouse", "musculus", "rat", "macaca",
                              "macaque", "monkey", "patient", "muscle", "serum"]
 
     def drop_rows(self):
-        """Drops in-vivo, mM, uknown cell lines and inhibition rows < -100"""
+        """Drops in-vivo, mM, uknown cell lines, RGA cell lines, and inhibition rows < -100"""
         conc = self.file["Concentration"].fillna("").str.lower()
         cells = self.file["Cell_Type"].fillna("").str.strip().str.lower()
         inhibition = pd.to_numeric(self.file["Inhibition"], errors="coerce")
