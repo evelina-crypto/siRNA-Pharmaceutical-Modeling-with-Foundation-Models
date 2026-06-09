@@ -7,7 +7,10 @@ Date     : 2026/06/05
 
 import numpy as np
 import pandas as pd
+import logging
 
+# logger = logging.getLogger(__name__)
+# logging.basicConfig(filename='modifications to update.log', encoding='utf-8', level=logging.DEBUG)
 
 class ChemistryEncoder:
 
@@ -16,29 +19,72 @@ class ChemistryEncoder:
         self.target_len = target_len  # matrix size for the siRNA sequence length
 
         # split to different categories
-        self.acid_map = {"RNA": 0, "DNA": 1, "GNA": 2}
-        self.sugar_map = {"Unmodified": 0, "2'-OMe": 1, "2'-F": 2}
-        self.linker_map = {"Normal": 0, "PS": 1, "VP": 2, "Both_VP_PS": 3}
+        self.acid_map = {"RNA": 0, "DNA": 1, "GNA": 2, "UNA": 3, "LNA": 4}
+        self.sugar_map = {
+            "Unmodified": 0,
+            "2'-OMe": 1,
+            "2'-F": 2,
+            "2'-M": 3,
+            "2'-OHe": 4,
+            "2'-P": 5,
+            "Abasic": 6,
+            "2'-F-4'-Thio": 7
+        }
+        self.linker_map = {
+            "Normal": 0,
+            "PS": 1,
+            "VP": 2,
+            "Both_VP_PS": 3,
+            "Phosphonate": 4
+        }
 
     def extract_chemistry(self, token_text):
         """
         Parses chemical modifications (columns: 'Modification_Types_Sense_strand' and
         'Modification_Types_Antisense_strand') into acid, sugar, and linker pieces
         """
+        # log for debugging
+        # known_vocabulary = [
+        #     "Deoxy", "Glycol", "RNA", "DNA", "GNA",  # acids
+        #     "2'-O-Methyl", "2'-OMe", "Fluoro", "2'-F",  # sugars
+        #     "Phosphorothioate", "Vinyl"  # linkers
+        # ]
+        #
+        # is_unknown = not any(word in token_text for word in known_vocabulary)
+        #
+        # if is_unknown:
+        #     logger.warning(f"New mods found: '{token_text}'")
 
         # acid extraction
         if "Deoxy" in token_text:
-            acid = "DNA"
+            if "thio" in token_text:
+                acid = "RNA"
+            else:
+                acid = "DNA"
         elif "Glycol" in token_text:
             acid = "GNA"
+        elif "Unlocked" in token_text or "UNA" in token_text:
+            acid = "UNA"
+        elif "Locked" in token_text or "LNA" in token_text:
+            acid = "LNA"
         else:
             acid = "RNA"
 
         # sugar extraction
-        if "2'-O-Methyl" in token_text or "2'-OMe" in token_text:
+        if "thio" in token_text:
+            sugar = "2'-F-4'-Thio"
+        elif "Abasic" in token_text:
+            sugar = "Abasic"
+        elif "2'-O-Methyl" in token_text:
             sugar = "2'-OMe"
-        elif "Fluoro" in token_text or "2'-F" in token_text:
+        elif "Fluoro" in token_text:
             sugar = "2'-F"
+        elif "Methoxy" in token_text:
+            sugar = "2'-M"
+        elif "2'-O-hexadecyl" in token_text:
+            sugar = "2'-OHe"
+        elif "2'-Phosphate" in token_text:
+            sugar = "2'-P"
         else:
             sugar = "Unmodified"
 
@@ -49,6 +95,8 @@ class ChemistryEncoder:
             linker = "PS"
         elif "Vinyl" in token_text:
             linker = "VP"
+        elif "phosphonate" in token_text:
+            linker = "Phosphonate"
         else:
             linker = "Normal"
 
@@ -110,9 +158,9 @@ class ChemistryEncoder:
             anti_sugars.append(s_mat)
             anti_linkers.append(l_mat)
 
-        self.file["Sense_Acid_One_Hot"] = sense_acids # one df row will hold 25x3 matrix
-        self.file["Sense_Sugar_One_Hot"] = sense_sugars # one df row will hold 25x3 matrix
-        self.file["Sense_Linker_One_Hot"] = sense_linkers # one df row will hold 25x4 matrix
+        self.file["Sense_Acid_One_Hot"] = sense_acids # one df row will hold 25x5 matrix
+        self.file["Sense_Sugar_One_Hot"] = sense_sugars # one df row will hold 25x8 matrix
+        self.file["Sense_Linker_One_Hot"] = sense_linkers # one df row will hold 25x5 matrix
 
         self.file["Antisense_Acid_One_Hot"] = anti_acids
         self.file["Antisense_Sugar_One_Hot"] = anti_sugars
