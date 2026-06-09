@@ -17,6 +17,30 @@ class DataCleaner:
         self.animal_terms = ["mice", "mouse", "musculus", "rat", "macaca",
                              "macaque", "monkey", "patient", "muscle", "serum"]
 
+    def drop_columns(self):
+        """Drop unnecessary columns - columns with information that is implicitly contained in other columns"""
+
+        cols_to_drop = [
+            # encoding related columns
+
+            # safe to drop 
+            "Modification_locations_Sense_strand",  # e.g Base, Sugar, Phosphate (what chemical structure modification effects)
+            "Modification_locations_Antisense_strand",# --- (same as above, but for the other strand)
+            "Modifications_sense_strand",   # the machine unreadable encoding of the modifications in the form "VPudGcadAgdTgagg"
+            "Modifications_Antisense_strand", # --- (same as above, but for the other strand)
+
+            # presumably useless columns
+            "Modifications_AntiSense_strand_3_5"
+            "position_Antisense_strand",    # list of positions of the modifications, safe to drop when matching with positions in the `Modification_Types_Antisense_strand` successfull 
+            "position_Sense_strand",    # --- (same as above, but for the other strand)
+            
+            # experimental conditions related columns
+            # to be filled
+        ]
+        present = [c for c in cols_to_drop if c in self.file.columns]
+        self.file.drop(columns=present)
+        print(f"dropped {len(present)} columns: {present}")
+
     def drop_rows(self):
         """Drops in-vivo, mM, uknown cell lines, RGA cell lines, and inhibition rows < -100"""
         conc = self.file["Concentration"].fillna("").str.lower()
@@ -50,4 +74,5 @@ class DataCleaner:
         """Runs the quality control and returns the cleaned table."""
         self.drop_rows()
         self.drop_invalid_sequences()
+        self.drop_columns()
         return self.file
