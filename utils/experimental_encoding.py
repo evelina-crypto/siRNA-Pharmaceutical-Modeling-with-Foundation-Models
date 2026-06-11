@@ -57,8 +57,9 @@ class ExperimentalEncoder:
         return vector
 
     def encode(self):
-        """Adds the parsed concentration, time and one-hot cell-type columns."""
+        """Adds the parsed concentration (dropped above 200 nM), time and one-hot cell-type columns."""
         self.file["Concentration_nM"] = self.file["Concentration"].map(self.parse_concentration)
+        self.file = self.file[self.file["Concentration_nM"] <= 200].copy() # drop rows above 200 nM
         self.file["Time_of_administration_h"] = self.file["Time_of_administration"].map(self.parse_time)
         self.file["Cell_Type_One_Hot"] = [self.encode_cell_type(v) for v in self.file["Cell_Type"]]
         return self.file
@@ -92,7 +93,7 @@ class FeatureNormalizer:
         if pd.isna(value):
             return np.nan
         span = self.time_max - self.time_min
-        if span == 0:  # all times identical
+        if span == 0:  
             return 0.0
         return (value - self.time_min) / span
 
