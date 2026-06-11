@@ -65,3 +65,26 @@ class SequenceEncoder:
         self.file["Antisense_Sequence_One_Hot"] = anti_seqs  # one df row will hold 25x5 matrix
 
         return "Dataframe was updated"
+
+    def check_nonstandard_bases(self, column_name: str) -> set[str]:
+        """Report bases in a sequence column that are not in self.base_map."""
+        sequences = self.file[column_name]
+        standard_bases = set(self.base_map)
+
+        nonstandard_bases = set()
+        for sequence in sequences.dropna():
+            sequence = str(sequence).replace(" ", "")
+            has_nonstandard = False
+            for base in sequence:
+                if base not in standard_bases:
+                    nonstandard_bases.add(base)
+                    has_nonstandard = True
+            if has_nonstandard:
+                print(sequence)
+
+        if nonstandard_bases:
+            print(f"[{column_name}] nonstandard bases: {sorted(nonstandard_bases)}")
+        else:
+            print(f"[{column_name}] all bases are standard ({sorted(standard_bases)})")
+        
+        return nonstandard_bases
