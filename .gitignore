@@ -1,0 +1,30 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+
+# Jupyter notebook checkpoints
+.ipynb_checkpoints/
+
+# macOS files
+.DS_Store
+
+# JetBrains / IntelliJ / PyCharm
+.idea/
+*.iml
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local environment files
+.envrc
+.env
+.env.local
+!.envrc.example
+
+# Generated data artifacts
+data/
+
+# Common analysis outputs
+*.log

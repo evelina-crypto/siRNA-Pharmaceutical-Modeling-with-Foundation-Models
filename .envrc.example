@@ -1,0 +1,7 @@
+# Copy this file to `.envrc` and replace the placeholder values with your local paths.
+#
+# Example:
+# cp .envrc.example .envrc
+
+export CMSIRNA_RAW_DATA_PATH="/absolute/path/to/CMsiRNA_data_update.tsv"
+export CMSIRNA_PROCESSED_DIR="/absolute/path/to/processed_outputs"
