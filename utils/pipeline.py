@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 from utils.data_cleaning_more_strict import MoreStrictDataCleaner
 from utils.data_cleaning import DataCleaner
-from utils.preprocess_invitro import preprocess_dataframe, add_mrna_column
+from utils.preprocess_invitro import add_mrna_column
 from utils.experimental_encoding import ExperimentalEncoder, FeatureNormalizer
 from utils.sequence_encoding import SequenceEncoder
 from utils.chemistry_encoding import ChemistryEncoder
@@ -43,16 +43,12 @@ class SiRNADataPipeline:
         else:
             working_df = DataCleaner(working_df).clean()
 
-        # 2. Run siRNA sequence preprocessing (skipping {fennec.featurizer import seq_list_to_seq} if needed)
-        print("Preprocessing nucleotide sequences")
-        working_df = preprocess_dataframe(working_df, skip_sirna_conversion=True)
-
-        # 3. mRNA sequence additions if requested
+        # 2. mRNA sequence additions if requested
         if add_mrna:
             print("Mapping mRNA structural profiles")
             working_df = add_mrna_column(working_df, fetch_missing_from_ncbi=self.fetch_missing_mrna)
 
-        # 4. Apply chemistry and sequence encoding
+        # 3. Apply chemistry and sequence encoding
         seq_encoder = SequenceEncoder(working_df, target_len=self.target_len)
         seq_encoder.update_dataframe()
         working_df = seq_encoder.file
@@ -61,7 +57,7 @@ class SiRNADataPipeline:
         chem_encoder.update_dataframe()
         working_df = chem_encoder.file
 
-        # 5. Apply cell type and experimental conditions encoding
+        # 4. Apply cell type and experimental conditions encoding
         working_df = ExperimentalEncoder(working_df).encode()
         working_df = FeatureNormalizer(working_df).normalize()
 
