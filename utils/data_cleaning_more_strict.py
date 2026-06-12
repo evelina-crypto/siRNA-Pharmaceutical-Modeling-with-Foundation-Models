@@ -68,9 +68,9 @@ class MoreStrictDataCleaner:
             modal_hours = fill_lookup.get((row["Cell_Type"], row["Concentration"]), np.nan)
             if pd.isna(modal_hours):
                 return fallback
-            return float(modal_hours)
+            return str(modal_hours) # float gives TypeError
 
-        filled = self.file.loc[missing_mask].apply(infer_time, axis=1)
+        filled = self.file.loc[missing_mask].apply(infer_time, axis=1).astype(str) # type flag
         self.file.loc[missing_mask, "Time_of_administration"] = filled
         print(f"filled {int(missing_mask.sum())} rows for missing time of administration")
 

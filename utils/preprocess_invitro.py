@@ -50,13 +50,14 @@ def process_guide(guide_seq):
 
 def preprocess_dataframe(df, skip_sirna_conversion=False):
     """Add siRNA-derived columns unless conversion is explicitly skipped."""
-    from fennec.featurizer import seq_list_to_seq
 
     df = df.copy()
 
     if skip_sirna_conversion:
         print("Skipping siRNA_guide/siRNA_passenger conversion; leaving existing siRNA columns unchanged.")
         return df
+
+    from fennec.featurizer import seq_list_to_seq
 
     missing_cols = [col for col in REQUIRED_COLUMNS if col not in df.columns]
     if missing_cols:
@@ -77,7 +78,7 @@ def preprocess_dataframe(df, skip_sirna_conversion=False):
 
 def add_mrna_column(df, fetch_missing_from_ncbi=False):
     """Add mRNA, mRNA_five_prime, and mRNA_three_prime columns using helpers from add_mrna_sequences.py."""
-    from add_mrna_sequences import (
+    from utils.add_mrna_sequences import (
         load_local_cache,
         get_mrna_from_local_cache,
         get_mrna_from_reference,
