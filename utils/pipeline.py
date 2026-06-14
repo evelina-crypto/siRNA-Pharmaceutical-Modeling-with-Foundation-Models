@@ -66,7 +66,12 @@ class SiRNADataPipeline:
         print("Dataset successfully enriched")
         return working_df
 
-    def prepare_for_classical_ml(self, enriched_df: pd.DataFrame, target_column: str = "Inhibition"):
+    def prepare_for_classical_ml(
+            self,
+            enriched_df: pd.DataFrame,
+            target_column: str = "Inhibition",
+            use_normalized_conditions: bool = True,
+    ):
         """
         Flattening and extraction for classical ml.
         Takes the fully updated df and flattens matrices for training.
@@ -90,8 +95,14 @@ class SiRNADataPipeline:
         as_linker = np.stack(df_ml["Antisense_Linker_One_Hot"].values).reshape(len(df_ml), -1)
 
         # 3. Gather experimental conditions
-        conc_norm = df_ml["Concentration_norm"].values.reshape(-1, 1)
-        time_norm = df_ml["Time_norm"].values.reshape(-1, 1)
+
+        if use_normalized_conditions:
+            concentration = df_ml["Concentration_norm"].values.reshape(-1, 1)
+            time = df_ml["Time_norm"].values.reshape(-1, 1)
+        else:
+            concentration = pd.to_numeric(df_ml["Concentration_log10_nM"], errors="coerce").values.reshape(-1, 1)
+            time = pd.to_numeric(df_ml["Time_of_administration_h"], errors="coerce").values.reshape(-1, 1)
+
         cell_type_oh = np.stack(df_ml["Cell_Type_One_Hot"].values)
 
         # 4. mRNA alignment features (only present when add_mrna=True)
@@ -104,8 +115,8 @@ class SiRNADataPipeline:
 
         # 5. Combine everything into a single flat 2D matrix
         X_flat = np.hstack([
-            conc_norm,
-            time_norm,
+            concentration,
+            time,
             cell_type_oh,
             s_seq, as_seq,
             s_acid, s_sugar, s_linker,
@@ -113,5 +124,7 @@ class SiRNADataPipeline:
             *mrna_cols,
         ])
 
-        print(f"Feature matrix X shape: {X_flat.shape}, target y shape: {y.shape}")
+        print(
+            f"Feature matrix X shape: {X_flat.shape}, target y shape: {y.shape} "
+        )
         return X_flat, groups, y

@@ -62,7 +62,10 @@ class FeatureNormalizer:
         return (value - self.time_min) / span
 
     def normalize(self):
-        """Adds the [0, 1] concentration and time columns (raw hours kept as-is)."""
+        """Adds log10 concentration plus [0, 1] concentration/time columns."""
+        self.file["Concentration_log10_nM"] = np.log10(
+            self.file["Concentration_nM"].where(self.file["Concentration_nM"] > 0)
+        )
         self.file["Concentration_norm"] = self.file["Concentration_nM"].map(self.scale_concentration)
         self.file["Time_norm"] = self.file["Time_of_administration_h"].map(self.scale_time)
         return self.file
