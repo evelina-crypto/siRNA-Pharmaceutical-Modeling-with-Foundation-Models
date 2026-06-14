@@ -13,6 +13,7 @@ from utils.preprocess_invitro import add_mrna_column
 from utils.experimental_encoding import ExperimentalEncoder, FeatureNormalizer
 from utils.sequence_encoding import SequenceEncoder
 from utils.chemistry_encoding import ChemistryEncoder
+from utils.mrna_alignment import add_alignment_columns
 
 
 class SiRNADataPipeline:
@@ -47,6 +48,7 @@ class SiRNADataPipeline:
         if add_mrna:
             print("Mapping mRNA structural profiles")
             working_df = add_mrna_column(working_df, fetch_missing_from_ncbi=self.fetch_missing_mrna)
+            working_df = add_alignment_columns(working_df)
 
         # 3. Apply chemistry and sequence encoding
         seq_encoder = SequenceEncoder(working_df, target_len=self.target_len)
@@ -92,7 +94,15 @@ class SiRNADataPipeline:
         time_norm = df_ml["Time_norm"].values.reshape(-1, 1)
         cell_type_oh = np.stack(df_ml["Cell_Type_One_Hot"].values)
 
-        # 4. Combine everything into a single flat 2D matrix (X)
+        # 4. mRNA alignment features (only present when add_mrna=True)
+        mrna_cols = []
+        if "edit_distance" in df_ml.columns and "target_site_pct" in df_ml.columns:
+            mrna_features = df_ml[["edit_distance", "target_site_pct"]].apply(
+                pd.to_numeric, errors="coerce"
+            ).fillna(0).values
+            mrna_cols.append(mrna_features)
+
+        # 5. Combine everything into a single flat 2D matrix
         X_flat = np.hstack([
             conc_norm,
             time_norm,
@@ -100,6 +110,7 @@ class SiRNADataPipeline:
             s_seq, as_seq,
             s_acid, s_sugar, s_linker,
             as_acid, as_sugar, as_linker,
+            *mrna_cols,
         ])
 
         print(f"Feature matrix X shape: {X_flat.shape}, target y shape: {y.shape}")

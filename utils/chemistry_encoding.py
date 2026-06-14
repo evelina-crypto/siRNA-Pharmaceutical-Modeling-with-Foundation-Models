@@ -19,7 +19,7 @@ class ChemistryEncoder:
         self.target_len = target_len  # matrix size for the siRNA sequence length
 
         # split to different categories
-        self.acid_map = {"RNA": 0, "DNA": 1, "GNA": 2, "UNA": 3, "LNA": 4}
+        self.acid_map = {"RNA": 0, "DNA": 1, "GNA": 2, "UNA": 3, "LNA": 4, "Unknown": 5}
         self.sugar_map = {
             "Unmodified": 0,
             "2'-OMe": 1,
@@ -28,14 +28,16 @@ class ChemistryEncoder:
             "2'-OHe": 4,
             "2'-P": 5,
             "Abasic": 6,
-            "2'-F-4'-Thio": 7
+            "2'-F-4'-Thio": 7,
+            "Unknown": 8
         }
         self.linker_map = {
             "Normal": 0,
             "PS": 1,
             "VP": 2,
             "Both_VP_PS": 3,
-            "Phosphonate": 4
+            "Phosphonate": 4,
+            "Unknown": 5
         }
 
     def extract_chemistry(self, token_text):
@@ -111,6 +113,9 @@ class ChemistryEncoder:
 
         # return the matrices as all zeros if there are NA values
         if pd.isna(cell_value) or not isinstance(cell_value, str):
+            acid_matrix[:, self.acid_map["Unknown"]] = 1.0
+            sugar_matrix[:, self.sugar_map["Unknown"]] = 1.0
+            linker_matrix[:, self.linker_map["Unknown"]] = 1.0
             return acid_matrix, sugar_matrix, linker_matrix
 
         tokens = cell_value.split(" || ")
@@ -158,9 +163,9 @@ class ChemistryEncoder:
             anti_sugars.append(s_mat)
             anti_linkers.append(l_mat)
 
-        self.file["Sense_Acid_One_Hot"] = sense_acids # one df row will hold 25x5 matrix
-        self.file["Sense_Sugar_One_Hot"] = sense_sugars # one df row will hold 25x8 matrix
-        self.file["Sense_Linker_One_Hot"] = sense_linkers # one df row will hold 25x5 matrix
+        self.file["Sense_Acid_One_Hot"] = sense_acids # one df row will hold 25x6 matrix
+        self.file["Sense_Sugar_One_Hot"] = sense_sugars # one df row will hold 25x9 matrix
+        self.file["Sense_Linker_One_Hot"] = sense_linkers # one df row will hold 25x6 matrix
 
         self.file["Antisense_Acid_One_Hot"] = anti_acids
         self.file["Antisense_Sugar_One_Hot"] = anti_sugars
