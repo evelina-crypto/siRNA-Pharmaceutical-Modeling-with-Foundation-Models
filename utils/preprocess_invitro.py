@@ -147,7 +147,12 @@ def add_mrna_column(df, fetch_missing_from_ncbi=False):
         print(f"  WARNING: Could not resolve mRNA for {gene}")
         gene_mrna_map[gene] = None
 
-    df["mRNA"] = df["gene_target_symbol_name"].map(gene_mrna_map)
+    mapped_mrna = df["gene_target_symbol_name"].map(gene_mrna_map)
+    if "mRNA" in df.columns:
+        # keep an mRNA the row already carries (the historic dataset), fill the rest from the gene map
+        df["mRNA"] = df["mRNA"].where(df["mRNA"].notna(), mapped_mrna)
+    else:
+        df["mRNA"] = mapped_mrna
     rows_with_mrna = df["mRNA"].notna().sum()
     print(f"Rows with mRNA: {rows_with_mrna}/{len(df)} ({100 * rows_with_mrna / len(df):.1f}%)")
 

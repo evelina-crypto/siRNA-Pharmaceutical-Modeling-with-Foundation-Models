@@ -22,6 +22,7 @@ def align_historic_to_cmsirna(path):
         "Concentration": historic["siRNA_concentration"].astype(str) + historic["concentration_unit"],
         "Time_of_administration": historic["Duration_after_transfection_h"].astype(str) + "h",
         "Inhibition": 100 - historic["mRNA_remaining_pct"], #remaining mRNA is the inverse of knockdown
+        "mRNA": historic["mRNA"], #the historic set already has mRNA
     })
 
     print(f"loaded {len(cmsirna)} historic rows")
