@@ -69,20 +69,21 @@ class DataCleaner:
             "Modifications_Antisense_strand", # --- (same as above, but for the other strand)
 
             # presumably useless columns
-            "Modifications_AntiSense_strand_3_5"
-            "position_Antisense_strand",    # list of positions of the modifications, safe to drop when matching with positions in the `Modification_Types_Antisense_strand` successfull 
+            "Modifications_AntiSense_strand_3_5",
+            "position_Antisense_strand",    # list of positions of the modifications, safe to drop when matching with positions in the `Modification_Types_Antisense_strand` successfull
             "position_Sense_strand",    # --- (same as above, but for the other strand)
-            
+
             # experimental conditions related columns
             # to be filled
         ]
         present = [c for c in cols_to_drop if c in self.file.columns]
-        self.file.drop(columns=present)
+        self.file = self.file.drop(columns=present)
         print(f"dropped {len(present)} columns: {present}")
 
     def drop_rows(self):
-        """Drops in-vivo, mM, above-200-nM, unknown/RGA cell line, and out-of-range inhibition rows.
-        A missing or blank dose stays as NaN, we keep it."""
+        """Drops in-vivo, mM, above 200 nM, unknown/RGA cell lines,
+        and out-of-range inhibition. NaN conc rows are handled separately
+        in drop_missing_concentration."""
         conc = self.file["Concentration"].fillna("").str.lower()
         cells = self.file["Cell_Type"].fillna("").str.strip().str.lower()
         inhibition = pd.to_numeric(self.file["Inhibition"], errors="coerce")
@@ -90,15 +91,41 @@ class DataCleaner:
         animal = cells.str.contains("|".join(self.animal_terms)) & ~cells.str.contains("primary")
         in_vivo = conc.str.contains("mg") | animal     # mg/kg dose or a live animal
         mM_dose = conc.str.contains("mm")              # mM is not a real siRNA concentration
-        over_200nM = self.file["Concentration_nM"] > 200  
+        over_200nM = self.file["Concentration_nM"] > 200
         unwanted = cells.isin(["unknown cell line", "rga cell"])
-        out_of_range = ~inhibition.between(-100, 100)   # inhibition filter
+        out_of_range = ~inhibition.between(-100, 100)
 
         keep = ~(in_vivo | mM_dose | over_200nM | unwanted | out_of_range)
         print(f"dropped {len(self.file) - keep.sum()} rows "
               f"(in-vivo {in_vivo.sum()}, mM {mM_dose.sum()}, conc>200 {over_200nM.sum()}, "
               f"cell {unwanted.sum()}, inhibition {out_of_range.sum()})")
         self.file = self.file[keep].copy()
+
+    def drop_missing_concentration(self):
+        """Drops NaN concentration. If you want to keep NaN values, set drop_missing_conc=False in clean()."""
+        missing = self.file["Concentration_nM"].isna()
+        print(f"dropped {int(missing.sum())} rows with NaN concentration")
+        self.file = self.file[~missing].copy()
+
+    def fill_missing_time(self):
+        """Fills missing time of administration from the concentration level.
+        Comments: Rows with no reported time tend to be the experiments with higher concentration and
+        usually run longer (the typical time is 24h up to 10 nM and 48h above it), so the
+        concentration level is the most honest guess we have. Time_imputed records which rows we filled,
+        since the fact that time was missing is itself informative."""
+        self.file["Time_imputed"] = self.file["Time_of_administration_h"].isna()
+
+        low_dose = self.file["Concentration_nM"] <= 10  #below this the typical time is 24h, above it 48h
+        times = self.file["Time_of_administration_h"]
+        low_median = times[low_dose].median()
+        high_median = times[~low_dose].median()
+
+        #the medians are read from the whole cleaned frame
+        by_dose = pd.Series(np.where(low_dose, low_median, high_median), index=self.file.index)
+        self.file["Time_of_administration_h"] = times.fillna(by_dose).fillna(24.0)
+
+        print(f"imputed {int(self.file['Time_imputed'].sum())} missing time rows "
+              f"(median {low_median}h at or below 10 nM, {high_median}h above)")
 
     def drop_invalid_sequences(self, max_len: int = 25):
         """Drops rows where the sense or antisense strand is missing/empty or longer
@@ -111,10 +138,14 @@ class DataCleaner:
         print(f"dropped {invalid.sum()} rows with a missing or >{max_len} nt strand")
         self.file = self.file[~invalid].copy()
 
-    def clean(self):
-        """Runs the quality control and returns the cleaned table."""
+    def clean(self, drop_missing_conc=True):
+        """Runs the quality contol and returns the cleaned table. drop_missing_conc removes rows
+        with NaN values; set it False to keep them for models that handle NaN."""
         self.parse_conditions()
         self.drop_rows()
+        if drop_missing_conc:
+            self.drop_missing_concentration()
         self.drop_invalid_sequences()
+        self.fill_missing_time()
         self.drop_columns()
         return self.file
