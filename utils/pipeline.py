@@ -115,3 +115,37 @@ class SiRNADataPipeline:
 
         print(f"Feature matrix X shape: {X_flat.shape}, target y shape: {y.shape}")
         return X_flat, groups, y
+
+    def build_feature_names(self, enriched_df: pd.DataFrame) -> list[str]:
+        """readable column names in the same order as prepare_for_classical_ml's hstack.
+        """
+        df = enriched_df
+
+        def clean(label):
+            return str(label).replace("[", "(").replace("]", ")").replace("<", "lt")
+
+        names = ["Concentration_norm", "Time_norm"]
+
+        cell_types = ExperimentalEncoder(df).cell_types
+        names += [f"Cell_{clean(c)}" for c in cell_types]
+
+        seq_encoder = SequenceEncoder(df, target_len=self.target_len)
+        seq_encoder.build_encoding_map()
+        seq_bases = list(seq_encoder.encoding_map)
+        for strand in ("Sense", "Antisense"):
+            for pos in range(1, self.target_len + 1):
+                for base in seq_bases:
+                    names.append(f"{strand}_seq_pos{pos}_{clean(base)}")
+
+        chem = ChemistryEncoder(df, target_len=self.target_len)
+        chem_blocks = (("acid", chem.acid_map), ("sugar", chem.sugar_map), ("linker", chem.linker_map))
+        for strand in ("Sense", "Antisense"):
+            for block_name, block_map in chem_blocks:
+                for pos in range(1, self.target_len + 1):
+                    for label in block_map:
+                        names.append(f"{strand}_{block_name}_pos{pos}_{clean(label)}")
+
+        if "edit_distance" in df.columns and "target_site_pct" in df.columns:
+            names += ["edit_distance", "target_site_pct"]
+
+        return names
