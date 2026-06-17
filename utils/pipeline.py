@@ -91,7 +91,8 @@ class SiRNADataPipeline:
 
         # 3. Gather experimental conditions
         conc_norm = df_ml["Concentration_norm"].values.reshape(-1, 1)
-        time_norm = df_ml["Time_norm"].values.reshape(-1, 1)
+        #time_norm = df_ml["Time_norm"].values.reshape(-1, 1)
+        time_raw = df_ml["Time_of_administration_h"].values.reshape(-1, 1)
         cell_type_oh = np.stack(df_ml["Cell_Type_One_Hot"].values)
 
         # 4. mRNA alignment features (only present when add_mrna=True)
@@ -105,7 +106,7 @@ class SiRNADataPipeline:
         # 5. Combine everything into a single flat 2D matrix
         X_flat = np.hstack([
             conc_norm,
-            time_norm,
+            time_raw,
             cell_type_oh,
             s_seq, as_seq,
             s_acid, s_sugar, s_linker,

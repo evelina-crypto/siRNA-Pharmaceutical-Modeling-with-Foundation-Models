@@ -53,5 +53,10 @@ def add_alignment_columns(df: pd.DataFrame) -> pd.DataFrame:
     )
     df = pd.concat([df, alignment], axis=1)
 
+    df_filtered = df[df["edit_distance"] <= 5.0].copy()
+
+    print(f"Removed {len(df) - len(df_filtered)} rows. Remaining: {len(df_filtered)}")
+    df = df_filtered
+
     print(f"edit_distance distribution:\n{df['edit_distance'].value_counts().sort_index()}")
     return df
