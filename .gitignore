@@ -26,5 +26,8 @@ env/
 # Generated data artifacts
 data/
 
+# Model/plot outputs
+output/
+
 # Common analysis outputs
 *.log
