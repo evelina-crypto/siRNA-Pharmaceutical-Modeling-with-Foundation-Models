@@ -124,7 +124,94 @@ class SiRNADataPipeline:
             *mrna_cols,
         ])
 
-        print(
-            f"Feature matrix X shape: {X_flat.shape}, target y shape: {y.shape} "
-        )
+        print(f"Feature matrix X shape: {X_flat.shape}, target y shape: {y.shape}")
         return X_flat, groups, y
+
+    def prepare_for_deep_learning(self, enriched_df: pd.DataFrame, target_column: str = "Inhibition"):
+        """Shape the enriched df for the multi-branch siRNA model.
+
+        Keeps the sequence/chemistry channels as a 3D tensor for
+        the 1D CNN, returns the experimental conditions separately for the
+        experimental MLP.
+
+        Returns
+            X_seq   : (N, 2 * D, target_len) float32. Guide (antisense) and
+                      passenger (sense) strands concatenated along the channel
+                      axis, where D = sequence + acid + sugar + linker one-hot
+                      widths per strand. Layout matches Conv1d (N, channels, L).
+            X_exp   : (N, 2 + n_cell_types) float32. Concentration_norm,
+                      Time_norm and the cell-type one-hot.
+            groups  : gene-target group labels (for grouped CV).
+            y       : target (Inhibition), raw numeric.
+        """
+        df_ml = enriched_df.copy()
+
+        # 1. Target and gene groups
+        y = pd.to_numeric(df_ml[target_column], errors="coerce").values
+        groups = df_ml["gene_target_symbol_name"].values
+
+        # 2. Sequence + chemistry blocks, each stored per row as (target_len, width)
+        def stack_block(column):
+            return np.stack(df_ml[column].values)  # (N, target_len, width)
+
+        sense_blocks = [
+            stack_block("Sense_Sequence_One_Hot"),
+            stack_block("Sense_Acid_One_Hot"),
+            stack_block("Sense_Sugar_One_Hot"),
+            stack_block("Sense_Linker_One_Hot"),
+        ]
+        antisense_blocks = [
+            stack_block("Antisense_Sequence_One_Hot"),
+            stack_block("Antisense_Acid_One_Hot"),
+            stack_block("Antisense_Sugar_One_Hot"),
+            stack_block("Antisense_Linker_One_Hot"),
+        ]
+
+        # concat all blocks along the feature axis -> (N, target_len, 2 * D),
+        # then move features to the channel axis -> (N, 2 * D, target_len)
+        X_seq = np.concatenate(sense_blocks + antisense_blocks, axis=2)
+        X_seq = np.transpose(X_seq, (0, 2, 1)).astype(np.float32)
+
+        # 3. Experimental conditions for the experimental MLP
+        conc_norm = df_ml["Concentration_norm"].values.reshape(-1, 1)
+        time_norm = df_ml["Time_norm"].values.reshape(-1, 1)
+        cell_type_oh = np.stack(df_ml["Cell_Type_One_Hot"].values)
+        X_exp = np.hstack([conc_norm, time_norm, cell_type_oh]).astype(np.float32)
+
+        print(f"Sequence tensor X_seq shape: {X_seq.shape}, "
+              f"experimental matrix X_exp shape: {X_exp.shape}, target y shape: {y.shape}")
+        return X_seq, X_exp, groups, y
+
+    def build_feature_names(self, enriched_df: pd.DataFrame) -> list[str]:
+        """readable column names in the same order as prepare_for_classical_ml's hstack.
+        """
+        df = enriched_df
+
+        def clean(label):
+            return str(label).replace("[", "(").replace("]", ")").replace("<", "lt")
+
+        names = ["Concentration_norm", "Time_norm"]
+
+        cell_types = ExperimentalEncoder(df).cell_types
+        names += [f"Cell_{clean(c)}" for c in cell_types]
+
+        seq_encoder = SequenceEncoder(df, target_len=self.target_len)
+        seq_encoder.build_encoding_map()
+        seq_bases = list(seq_encoder.encoding_map)
+        for strand in ("Sense", "Antisense"):
+            for pos in range(1, self.target_len + 1):
+                for base in seq_bases:
+                    names.append(f"{strand}_seq_pos{pos}_{clean(base)}")
+
+        chem = ChemistryEncoder(df, target_len=self.target_len)
+        chem_blocks = (("acid", chem.acid_map), ("sugar", chem.sugar_map), ("linker", chem.linker_map))
+        for strand in ("Sense", "Antisense"):
+            for block_name, block_map in chem_blocks:
+                for pos in range(1, self.target_len + 1):
+                    for label in block_map:
+                        names.append(f"{strand}_{block_name}_pos{pos}_{clean(label)}")
+
+        if "edit_distance" in df.columns and "target_site_pct" in df.columns:
+            names += ["edit_distance", "target_site_pct"]
+
+        return names

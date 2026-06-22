@@ -45,7 +45,7 @@ class ChemistryEncoder:
         Parses chemical modifications (columns: 'Modification_Types_Sense_strand' and
         'Modification_Types_Antisense_strand') into acid, sugar, and linker pieces
         """
-        # log for debugging
+
         # known_vocabulary = [
         #     "Deoxy", "Glycol", "RNA", "DNA", "GNA",  # acids
         #     "2'-O-Methyl", "2'-OMe", "Fluoro", "2'-F",  # sugars
@@ -73,7 +73,7 @@ class ChemistryEncoder:
             acid = "RNA"
 
         # sugar extraction
-        if "thio" in token_text:
+        if "4'-Thio" in token_text or "4'-thio" in token_text:
             sugar = "2'-F-4'-Thio"
         elif "Abasic" in token_text:
             sugar = "Abasic"
