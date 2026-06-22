@@ -3,9 +3,10 @@
 Comments : Full training run for the siRNA sequence CNN + final MLP head.
            Loads the merged dataset with the usual (non-strict) cleaner, shapes
            it with prepare_for_deep_learning, splits by gene (GroupKFold), scales
-           the target per training fold, and trains/evaluates the sequence-only
-           CrewSiRNAModel with Adam + MSE. Reuses the single-input train/eval
-           helpers in modeling.training_utils.
+           the target per training fold, and trains/evaluates the
+           CrewSiRNAModel (sequence + experimental conditions) with Adam + MSE.
+           Uses the multi-input train/eval helpers in
+           modeling.multi_input_training_utils since use_experimental=True.
 """
 
 import argparse
@@ -18,8 +19,8 @@ from sklearn.preprocessing import StandardScaler
 from torch.utils.data import DataLoader
 
 from modeling.crew_model import CrewSiRNAModel
-from modeling.training_utils import (IndexedTensorDataset, create_validation_loader, evaluate_model, set_global_seed,
-                                     train_model, )
+from modeling.training_utils import create_validation_loader, set_global_seed
+from modeling.multi_input_training_utils import IndexedMultiTensorDataset, train_model_multi, evaluate_model_multi
 from utils.merge_historic_data import load_merged_dataset
 from utils.pipeline import SiRNADataPipeline
 from utils.splitter import GroupKFoldLeakPerGroup
@@ -32,7 +33,7 @@ DEFAULT_HISTORIC_PATH = os.path.join(REPO_ROOT, "dataset", "Historic_Takayuki_hu
 def run_sequence_cnn_cv(cmsirna_path=DEFAULT_CMSIRNA_PATH, historic_path=DEFAULT_HISTORIC_PATH, n_splits=3, leak_n=0,
                         val_split=0.15, batch_size=64, lr=5e-4, epochs=20, patience=5, seed=42, max_rows=None,
                         device=None):
-    """Cross-validated full run of the sequence-only CrewSiRNAModel.
+    """Cross-validated full run of the sequence + experimental CrewSiRNAModel.
 
     Split is by gene (leak_n=0 = strict gene split). Returns the list of per-fold
     metric dicts.
@@ -53,10 +54,12 @@ def run_sequence_cnn_cv(cmsirna_path=DEFAULT_CMSIRNA_PATH, historic_path=DEFAULT
 
     # Drop rows with a missing target
     valid = ~np.isnan(y)
-    X_seq, groups, y = X_seq[valid], groups[valid], y[valid]
-    print(f"Usable samples: {len(y)}, genes: {len(np.unique(groups))}, seq channels: {X_seq.shape[1]}")
+    X_seq, X_exp, groups, y = X_seq[valid], X_exp[valid], groups[valid], y[valid]
+    print(f"Usable samples: {len(y)}, genes: {len(np.unique(groups))}, "
+          f"seq channels: {X_seq.shape[1]}, exp dim: {X_exp.shape[1]}")
 
     seq_in_channels = X_seq.shape[1]
+    exp_input_dim = X_exp.shape[1]
     cv = GroupKFoldLeakPerGroup(n_splits=n_splits, leak_n=leak_n, random_state=seed)
     fold_metrics = []
 
@@ -70,24 +73,32 @@ def run_sequence_cnn_cv(cmsirna_path=DEFAULT_CMSIRNA_PATH, historic_path=DEFAULT
         y_train = scaler_y.transform(y[train_idx].reshape(-1, 1)).astype(np.float32)
         y_test = scaler_y.transform(y[test_idx].reshape(-1, 1)).astype(np.float32)
 
-        train_ds = IndexedTensorDataset(torch.tensor(X_seq[train_idx]), torch.tensor(y_train),
-            [str(g) for g in groups[train_idx]], )
-        test_ds = IndexedTensorDataset(torch.tensor(X_seq[test_idx]), torch.tensor(y_test),
-            [str(g) for g in groups[test_idx]], )
+        train_ds = IndexedMultiTensorDataset(
+            torch.tensor(X_seq[train_idx]), torch.tensor(X_exp[train_idx]), torch.tensor(y_train),
+            [str(g) for g in groups[train_idx]],
+        )
+        test_ds = IndexedMultiTensorDataset(
+            torch.tensor(X_seq[test_idx]), torch.tensor(X_exp[test_idx]), torch.tensor(y_test),
+            [str(g) for g in groups[test_idx]],
+        )
 
         train_loader, val_loader = create_validation_loader(train_ds, val_split=val_split, batch_size=batch_size,
             generator=generator, )
         test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False)
 
-        # Sequence-only model (single-input, train_model compatible)
-        model = CrewSiRNAModel(seq_in_channels=seq_in_channels, use_experimental=False).to(device)
+        # Sequence + experimental model (multi-input)
+        model = CrewSiRNAModel(
+            seq_in_channels=seq_in_channels,
+            exp_input_dim=exp_input_dim,
+            use_experimental=True,
+        ).to(device)
         criterion = nn.MSELoss()
         optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
-        model, history = train_model(model, train_loader, val_loader, criterion, optimizer, epochs=epochs,
+        model, history = train_model_multi(model, train_loader, val_loader, criterion, optimizer, epochs=epochs,
             device=device, patience=patience, )
 
-        metrics, _, _, _ = evaluate_model(scaler_y, model, test_loader, device)
+        metrics, _, _, _ = evaluate_model_multi(scaler_y, model, test_loader, device)
         print("Fold metrics: " + ", ".join(f"{k}={v:.4f}" for k, v in metrics.items()))
         fold_metrics.append(metrics)
 
@@ -101,7 +112,7 @@ def run_sequence_cnn_cv(cmsirna_path=DEFAULT_CMSIRNA_PATH, historic_path=DEFAULT
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Full run of the siRNA sequence CNN + MLP head")
+    parser = argparse.ArgumentParser(description="Full run of the siRNA sequence CNN + experimental MLP + fusion head")
     parser.add_argument("--cmsirna-path", default=DEFAULT_CMSIRNA_PATH)
     parser.add_argument("--historic-path", default=DEFAULT_HISTORIC_PATH)
     parser.add_argument("--n-splits", type=int, default=3)
