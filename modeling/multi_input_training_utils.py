@@ -8,6 +8,7 @@ Comments : Multi-input variants of IndexedTensorDataset / train_model / evaluate
 import numpy as np
 import torch
 import torch.nn as nn
+from scipy.stats import pearsonr, spearmanr
 from sklearn.metrics import mean_squared_error
 from torch.utils.data import DataLoader
 
@@ -101,11 +102,18 @@ def evaluate_model_multi(scaler_y, model, test_loader, device='cpu'):
 
     if (np.std(predictions) == 0 or np.std(actuals) == 0
             or np.any(np.isnan(predictions)) or np.any(np.isnan(actuals))):
-        test_corr = np.nan
+        test_pearson = np.nan
+        test_spearman = np.nan
     else:
-        test_corr = np.corrcoef(predictions, actuals)[0, 1]
+        test_pearson = pearsonr(predictions, actuals)[0]
+        test_spearman = spearmanr(predictions, actuals)[0]
 
     test_mse = mean_squared_error(actuals, predictions)
 
-    metrics = {'test_loss': test_loss, 'test_correlation': test_corr, 'test_mse': test_mse}
+    metrics = {
+        'test_loss': test_loss,
+        'test_pearson': test_pearson,
+        'test_spearman': test_spearman,
+        'test_mse': test_mse,
+    }
     return metrics, predictions, actuals, sample_names
