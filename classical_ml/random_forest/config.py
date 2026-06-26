@@ -15,7 +15,7 @@ class RandomForestExperimentConfig:
     use_normalized_conditions: bool = False
 
     n_splits: int = 3
-    leak_n: int = 30
+    leak_n: int = 0
     outer_test_size: float = 0.33
     random_state: int = 42
 
