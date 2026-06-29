@@ -1,14 +1,8 @@
 """sequence_cnn.py
 
 Comments : 1D CNN branch for the siRNA sequence + chemistry channels of the
-           CMsiRNA model. Guide (antisense) and passenger (sense) strands are
-           concatenated along the encoding/channel axis, so the input is a
-           tensor of (N, 2 * D, seq_len) where D = sequence + acid + sugar +
-           linker one-hot widths per strand. Three conv layers (kernel sizes
-           3 -> 5 -> 7) are run in sequence; the output of each layer is global
-           average pooled and the three pooled vectors are concatenated
-           (torch.cat) to form skip connections from all three layers into the
-           final MLP (see crew_model.py).
+           CMsiRNA model. Updated Conv1dBlock with LayerNorm instead of
+           batch normalization.
 """
 
 import torch
@@ -16,20 +10,23 @@ import torch.nn as nn
 
 
 class Conv1dBlock(nn.Module):
-    """Conv -> BatchNorm -> activation -> Dropout. Padding is kernel_size // 2 so the length is preserved.
-    """
+    """Conv -> LayerNorm -> activation -> Dropout."""
 
     def __init__(self, in_channels, out_channels, kernel_size, dropout=0.3, activation=nn.ReLU):
         super().__init__()
-        self.block = nn.Sequential(
-            nn.Conv1d(in_channels, out_channels, kernel_size, padding=kernel_size // 2),
-            nn.BatchNorm1d(out_channels),
-            activation(),
-            nn.Dropout(dropout),
-        )
+        self.conv = nn.Conv1d(in_channels, out_channels, kernel_size, padding=kernel_size // 2)
+        # LayerNorm takes the number of channels
+        self.norm = nn.LayerNorm(out_channels)
+        self.act = activation()
+        self.drop = nn.Dropout(dropout)
 
     def forward(self, x):
-        return self.block(x)
+        x = self.conv(x)
+        x = x.permute(0, 2, 1)
+        x = self.norm(x)
+        x = x.permute(0, 2, 1)
+
+        return self.drop(self.act(x))
 
 
 class SiRNASequenceCNN(nn.Module):

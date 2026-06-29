@@ -8,11 +8,13 @@ Comments : Full training run for the siRNA sequence CNN + final MLP head.
            Uses the multi-input train/eval helpers in
            modeling.multi_input_training_utils since use_experimental=True.
 """
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import argparse
-import os
-
 import numpy as np
+import pandas as pd
 import torch
 import torch.nn as nn
 from sklearn.preprocessing import StandardScaler
@@ -32,7 +34,7 @@ DEFAULT_HISTORIC_PATH = os.path.join(REPO_ROOT, "dataset", "Historic_Takayuki_hu
 
 def run_sequence_cnn_cv(cmsirna_path=DEFAULT_CMSIRNA_PATH, historic_path=DEFAULT_HISTORIC_PATH, n_splits=3, leak_n=0,
                         val_split=0.15, batch_size=64, lr=5e-4, epochs=20, patience=5, seed=42, max_rows=None,
-                        device=None):
+                        device=None, tag="baseline"):
     """Cross-validated full run of the sequence + experimental CrewSiRNAModel.
 
     Split is by gene (leak_n=0 = strict gene split). Returns the list of per-fold
@@ -43,18 +45,24 @@ def run_sequence_cnn_cv(cmsirna_path=DEFAULT_CMSIRNA_PATH, historic_path=DEFAULT
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
-    # Load and enrich with the usual (non-strict) cleaner, no mRNA branch
     raw_df = load_merged_dataset(cmsirna_path, historic_path)
     if max_rows is not None:
         raw_df = raw_df.sample(n=min(max_rows, len(raw_df)), random_state=seed).reset_index(drop=True)
 
     pipeline = SiRNADataPipeline(target_len=25)
-    enriched = pipeline.enrich_dataset_with_encodings(raw_df, strict_cleaning=False, add_mrna=False, )
+    enriched = pipeline.enrich_dataset_with_encodings(raw_df, strict_cleaning=False, add_mrna=False)
     X_seq, X_exp, groups, y = pipeline.prepare_for_deep_learning(enriched, target_column="Inhibition")
 
-    # Drop rows with a missing target
     valid = ~np.isnan(y)
     X_seq, X_exp, groups, y = X_seq[valid], X_exp[valid], groups[valid], y[valid]
+
+    if "patent_id" in enriched.columns:
+        patent_groups = enriched["patent_id"].fillna("unknown").astype(str).values[valid]
+        print(f"Patent groups: {len(np.unique(patent_groups))} unique patents")
+    else:
+        print("WARNING: patent_id not found — falling back to gene groups")
+        patent_groups = groups
+
     print(f"Usable samples: {len(y)}, genes: {len(np.unique(groups))}, "
           f"seq channels: {X_seq.shape[1]}, exp dim: {X_exp.shape[1]}")
 
@@ -68,25 +76,27 @@ def run_sequence_cnn_cv(cmsirna_path=DEFAULT_CMSIRNA_PATH, historic_path=DEFAULT
               f"(train {len(train_idx)}, test {len(test_idx)}) ===")
         generator = torch.Generator().manual_seed(seed + fold)
 
-        # Target scaling fit on the training fold only (leakage-free)
         scaler_y = StandardScaler().fit(y[train_idx].reshape(-1, 1))
         y_train = scaler_y.transform(y[train_idx].reshape(-1, 1)).astype(np.float32)
         y_test = scaler_y.transform(y[test_idx].reshape(-1, 1)).astype(np.float32)
 
         train_ds = IndexedMultiTensorDataset(
-            torch.tensor(X_seq[train_idx]), torch.tensor(X_exp[train_idx]), torch.tensor(y_train),
-            [str(g) for g in groups[train_idx]],
+            torch.tensor(X_seq[train_idx]),
+            torch.tensor(X_exp[train_idx]),
+            torch.tensor(y_train),
+            patent_indices=[str(p) for p in patent_groups[train_idx]],
         )
         test_ds = IndexedMultiTensorDataset(
-            torch.tensor(X_seq[test_idx]), torch.tensor(X_exp[test_idx]), torch.tensor(y_test),
-            [str(g) for g in groups[test_idx]],
+            torch.tensor(X_seq[test_idx]),
+            torch.tensor(X_exp[test_idx]),
+            torch.tensor(y_test),
+            patent_indices=[str(p) for p in patent_groups[test_idx]],
         )
 
         train_loader, val_loader = create_validation_loader(train_ds, val_split=val_split, batch_size=batch_size,
-            generator=generator, )
+                                                            generator=generator)
         test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False)
 
-        # Sequence + experimental model (multi-input)
         model = CrewSiRNAModel(
             seq_in_channels=seq_in_channels,
             exp_input_dim=exp_input_dim,
@@ -95,18 +105,32 @@ def run_sequence_cnn_cv(cmsirna_path=DEFAULT_CMSIRNA_PATH, historic_path=DEFAULT
         criterion = nn.MSELoss()
         optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
-        model, history = train_model_multi(model, train_loader, val_loader, criterion, optimizer, epochs=epochs,
-            device=device, patience=patience, )
+        model, history = train_model_multi(model, train_loader, val_loader, criterion, optimizer,
+                                           epochs=epochs, device=device, patience=patience)
 
-        metrics, _, _, _ = evaluate_model_multi(scaler_y, model, test_loader, device)
+        metrics, _, _ = evaluate_model_multi(scaler_y, model, test_loader, device)
         print("Fold metrics: " + ", ".join(f"{k}={v:.4f}" for k, v in metrics.items()))
         fold_metrics.append(metrics)
 
-    # 5. Aggregate
     print("\n=== Cross-validation summary ===")
     for key in fold_metrics[0]:
         values = np.array([m[key] for m in fold_metrics], dtype=float)
         print(f"{key}: mean={np.nanmean(values):.4f} +/- {np.nanstd(values):.4f}")
+
+    summary = {}
+    for key in fold_metrics[0]:
+        values = np.array([m[key] for m in fold_metrics], dtype=float)
+        summary[f"{key}_mean"] = np.nanmean(values)
+        summary[f"{key}_std"] = np.nanstd(values)
+    summary["tag"] = tag
+
+    results_path = os.path.join(os.getcwd(), "ablation_results1.csv")
+    results_df = pd.DataFrame([summary])
+    if os.path.exists(results_path):
+        existing = pd.read_csv(results_path)
+        results_df = pd.concat([existing, results_df], ignore_index=True)
+    results_df.to_csv(results_path, index=False)
+    print(f"Saved results to {results_path}")
 
     return fold_metrics
 
@@ -124,11 +148,13 @@ def main():
     parser.add_argument("--patience", type=int, default=5)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max-rows", type=int, default=None, help="cap rows for a quick check")
+    parser.add_argument("--tag", type=str, default="baseline", help="label for ablation results CSV")
     args = parser.parse_args()
 
     run_sequence_cnn_cv(cmsirna_path=args.cmsirna_path, historic_path=args.historic_path, n_splits=args.n_splits,
-        leak_n=args.leak_n, val_split=args.val_split, batch_size=args.batch_size, lr=args.lr, epochs=args.epochs,
-        patience=args.patience, seed=args.seed, max_rows=args.max_rows, )
+                        leak_n=args.leak_n, val_split=args.val_split, batch_size=args.batch_size, lr=args.lr,
+                        epochs=args.epochs, patience=args.patience, seed=args.seed, max_rows=args.max_rows,
+                        tag=args.tag)
 
 
 if __name__ == "__main__":
