@@ -20,7 +20,7 @@ from modeling.sequence_cnn import SiRNASequenceCNN
 
 
 class MRNAFMEncoder(nn.Module):
-    """Placeholder for the mRNA foundation model."""
+    """Project concatenated, precomputed mRNA embeddings for static mode."""
 
     def __init__(self, input_dim, embedding_dim=64, **_):
         super().__init__()
@@ -28,6 +28,62 @@ class MRNAFMEncoder(nn.Module):
 
     def forward(self, x):
         return self.net(x)
+
+
+class RuntimeOrthrusEncoder(nn.Module):
+    """Run three fixed-length slices through a selectively unfrozen Orthrus.
+
+    ``packed_slices`` contains ``(one_hot, lengths, present_mask)`` with shapes
+    ``(B, 3, 4, L)``, ``(B, 3)``, and ``(B, 3)``. The three 512-dimensional
+    representations and three presence flags are projected to the Crew mRNA
+    branch dimension.
+    """
+
+    def __init__(self, model_dir, checkpoint_name, embedding_dim=64,
+                 unfreeze_last_n=1):
+        super().__init__()
+        from utils.fm_utils import load_orthrus
+
+        self.backbone = load_orthrus(
+            model_dir, checkpoint_name=checkpoint_name, freeze=False,
+        )
+        layer_count = len(self.backbone.layers)
+        if not 0 <= unfreeze_last_n <= layer_count:
+            raise ValueError(
+                f"unfreeze_last_n must be between 0 and {layer_count}"
+            )
+
+        for parameter in self.backbone.parameters():
+            parameter.requires_grad = False
+        if unfreeze_last_n:
+            for layer in self.backbone.layers[-unfreeze_last_n:]:
+                for parameter in layer.parameters():
+                    parameter.requires_grad = True
+            for parameter in self.backbone.norm_f.parameters():
+                parameter.requires_grad = True
+
+        representation_dim = self.backbone.embedding.out_features
+        self.net = nn.Linear(3 * representation_dim + 3, embedding_dim)
+        self.unfreeze_last_n = unfreeze_last_n
+
+    def forward(self, packed_slices):
+        one_hot, lengths, present_mask = packed_slices
+        batch_size, slice_count, channels, width = one_hot.shape
+        flat = one_hot.reshape(batch_size * slice_count, channels, width)
+        flat_lengths = lengths.reshape(-1)
+        # This Orthrus/Mamba checkpoint is numerically unstable in FP16 on
+        # the T4. Keep the backbone in FP32 even when the surrounding Crew model
+        # uses autocast; the smaller CNN/MLP branches still benefit from AMP.
+        with torch.autocast(device_type=flat.device.type, enabled=False):
+            representations = self.backbone.representation(
+                flat.float(), flat_lengths,
+            )
+        representations = representations.reshape(batch_size, slice_count, -1)
+        representations = representations * present_mask.unsqueeze(-1)
+        features = torch.cat(
+            [representations.flatten(start_dim=1), present_mask.float()], dim=1,
+        )
+        return self.net(features)
 
 
 class CrewSiRNAModel(nn.Module):
@@ -41,7 +97,9 @@ class CrewSiRNAModel(nn.Module):
 
     def __init__(self, seq_in_channels, exp_input_dim=None, use_experimental=True,
                  emb_dim=64, fusion_hidden=64, mrna_input_dim=None,
-                 mrna_embedding_dim=0, dropout=0.3, activation=nn.ReLU):
+                 mrna_embedding_dim=0, dropout=0.3, activation=nn.ReLU,
+                 orthrus_model_dir=None, orthrus_checkpoint=None,
+                 orthrus_unfreeze_last_n=1):
         super().__init__()
 
         self.seq_cnn = SiRNASequenceCNN(
@@ -58,8 +116,19 @@ class CrewSiRNAModel(nn.Module):
             )
             fused_dim += emb_dim
 
-        # mRNA foundation-model branch placeholder
-        if mrna_embedding_dim > 0 and mrna_input_dim is not None:
+        # Runtime mode owns an Orthrus backbone; static mode projects cached
+        # representations. They deliberately share the same 64-d fusion branch.
+        if orthrus_model_dir is not None:
+            if not orthrus_checkpoint:
+                raise ValueError("orthrus_checkpoint is required in runtime mode")
+            self.mrna_encoder = RuntimeOrthrusEncoder(
+                model_dir=orthrus_model_dir,
+                checkpoint_name=orthrus_checkpoint,
+                embedding_dim=mrna_embedding_dim,
+                unfreeze_last_n=orthrus_unfreeze_last_n,
+            )
+            fused_dim += mrna_embedding_dim
+        elif mrna_embedding_dim > 0 and mrna_input_dim is not None:
             self.mrna_encoder = MRNAFMEncoder(
                 input_dim=mrna_input_dim, embedding_dim=mrna_embedding_dim,
                 dropout=dropout, activation=activation,

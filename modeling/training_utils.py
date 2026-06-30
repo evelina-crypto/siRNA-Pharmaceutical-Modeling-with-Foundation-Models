@@ -30,15 +30,22 @@ def set_global_seed(seed):
     os.environ['PYTHONHASHSEED'] = str(seed)
 
 
-def create_validation_loader(train_dataset, val_split=0.2, batch_size=32, generator=None):
-    """Create validation loader from training data"""
+def create_validation_loader(train_dataset, val_split=0.2, batch_size=32,
+                             generator=None, collate_fn=None):
+    """Create validation loader from training data."""
     train_size = int((1 - val_split) * len(train_dataset))
     val_size = len(train_dataset) - train_size
     train_subset, val_subset = torch.utils.data.random_split(
         train_dataset, [train_size, val_size], generator=generator
     )
-    train_loader = DataLoader(train_subset, batch_size=batch_size, shuffle=False, generator=generator)
-    val_loader = DataLoader(val_subset, batch_size=batch_size, shuffle=False, generator=generator)
+    loader_kwargs = {
+        "batch_size": batch_size,
+        "shuffle": False,
+        "generator": generator,
+        "collate_fn": collate_fn,
+    }
+    train_loader = DataLoader(train_subset, **loader_kwargs)
+    val_loader = DataLoader(val_subset, **loader_kwargs)
     return train_loader, val_loader
 
 
