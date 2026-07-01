@@ -215,3 +215,47 @@ class SiRNADataPipeline:
             names += ["edit_distance", "target_site_pct"]
 
         return names
+
+    def build_experimental_feature_names(self, enriched_df: pd.DataFrame) -> list[str]:
+        """Names for X_exp from prepare_for_deep_learning, in column order.
+
+        Matches X_exp = [Concentration_norm, Time_norm, Cell_Type_One_Hot].
+        """
+        def clean(label):
+            return str(label).replace("[", "(").replace("]", ")").replace("<", "lt")
+
+        cell_types = ExperimentalEncoder(enriched_df).cell_types
+        return ["Concentration_norm", "Time_norm"] + [f"Cell_{clean(c)}" for c in cell_types]
+
+    def build_sequence_channel_names(self, enriched_df: pd.DataFrame) -> list[str]:
+        """Channel names for X_seq from prepare_for_deep_learning, in channel order.
+
+        X_seq has shape (N, 2 * D, target_len); the channel axis follows the
+        block concatenation order sense_blocks + antisense_blocks, where each
+        block is (seq, acid, sugar, linker) and contributes one channel per
+        one-hot category. The length axis (positions 1..target_len) is separate
+        and is NOT part of these names.
+        """
+        df = enriched_df
+
+        def clean(label):
+            return str(label).replace("[", "(").replace("]", ")").replace("<", "lt")
+
+        seq_encoder = SequenceEncoder(df, target_len=self.target_len)
+        seq_encoder.build_encoding_map()
+        seq_bases = list(seq_encoder.encoding_map)
+
+        chem = ChemistryEncoder(df, target_len=self.target_len)
+        blocks = (
+            ("seq", seq_bases),
+            ("acid", list(chem.acid_map)),
+            ("sugar", list(chem.sugar_map)),
+            ("linker", list(chem.linker_map)),
+        )
+
+        names = []
+        for strand in ("Sense", "Antisense"):
+            for block_name, categories in blocks:
+                for category in categories:
+                    names.append(f"{strand}_{block_name}_{clean(category)}")
+        return names

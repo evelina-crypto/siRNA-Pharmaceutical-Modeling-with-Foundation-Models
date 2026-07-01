@@ -13,6 +13,7 @@ import argparse
 import os
 
 import numpy as np
+import pandas as pd
 import torch
 import torch.nn as nn
 from sklearn.preprocessing import StandardScaler
@@ -28,15 +29,25 @@ from utils.splitter import GroupKFoldLeakPerGroup
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DEFAULT_CMSIRNA_PATH = os.path.join(REPO_ROOT, "dataset", "primary_dataset", "CMsiRNA_data_update.tsv")
 DEFAULT_HISTORIC_PATH = os.path.join(REPO_ROOT, "dataset", "Historic_Takayuki_hueskan_ichihara.csv")
+DEFAULT_RESULTS_DIR = os.path.join(REPO_ROOT, "results")
+DEFAULT_WEIGHTS_DIR = os.path.join(DEFAULT_RESULTS_DIR, "weights")
+DEFAULT_ATTRIBUTIONS_DIR = os.path.join(DEFAULT_RESULTS_DIR, "attributions")
+DEFAULT_ATTRIBUTION_PLOTS_DIR = os.path.join(DEFAULT_ATTRIBUTIONS_DIR, "attribution_plots")
 
 
 def run_sequence_cnn_cv(cmsirna_path=DEFAULT_CMSIRNA_PATH, historic_path=DEFAULT_HISTORIC_PATH, n_splits=3, leak_n=0,
                         val_split=0.15, batch_size=64, lr=5e-4, epochs=20, patience=5, seed=42, max_rows=None,
-                        device=None):
+                        device=None, save_weights=True, weights_dir=DEFAULT_WEIGHTS_DIR,
+                        attribution=False, attributions_dir=DEFAULT_ATTRIBUTIONS_DIR):
     """Cross-validated full run of the sequence + experimental CrewSiRNAModel.
 
     Split is by gene (leak_n=0 = strict gene split). Returns the list of per-fold
     metric dicts.
+
+    For each CV split the trained model (best-epoch, early-stopping-restored) is
+    saved with the metadata needed to reload the exact test split. When
+    attribution=True, Integrated Gradients maps are also computed on the fold's
+    test set and saved per branch (sequence + experimental).
     """
 
     set_global_seed(seed)
@@ -62,6 +73,17 @@ def run_sequence_cnn_cv(cmsirna_path=DEFAULT_CMSIRNA_PATH, historic_path=DEFAULT
     exp_input_dim = X_exp.shape[1]
     cv = GroupKFoldLeakPerGroup(n_splits=n_splits, leak_n=leak_n, random_state=seed)
     fold_metrics = []
+
+    if save_weights:
+        os.makedirs(weights_dir, exist_ok=True)
+
+    # readable names (in tensor order) for the attribution maps
+    seq_channel_names = exp_feature_names = None
+    fold_attr_seq, fold_attr_exp, fold_X_seq, fold_X_exp, fold_sample_ids = [], [], [], [], []
+    if attribution:
+        os.makedirs(attributions_dir, exist_ok=True)
+        seq_channel_names = pipeline.build_sequence_channel_names(enriched)
+        exp_feature_names = pipeline.build_experimental_feature_names(enriched)
 
     for fold, (train_idx, test_idx) in enumerate(cv.split(X_seq, y, groups)):
         print(f"\n=== Fold {fold + 1}/{n_splits} "
@@ -99,8 +121,76 @@ def run_sequence_cnn_cv(cmsirna_path=DEFAULT_CMSIRNA_PATH, historic_path=DEFAULT
             device=device, patience=patience, )
 
         metrics, _, _, _ = evaluate_model_multi(scaler_y, model, test_loader, device)
+        # best epoch val loss (early stopping restores these weights) and last epoch val loss
+        metrics["best_loss"] = float(np.min(history["val_loss"])) if history["val_loss"] else float("nan")
+        metrics["final_val_loss"] = float(history["val_loss"][-1]) if history["val_loss"] else float("nan")
         print("Fold metrics: " + ", ".join(f"{k}={v:.4f}" for k, v in metrics.items()))
         fold_metrics.append(metrics)
+
+        # Save the (best-epoch, early-stopping-restored) model plus the metadata
+        # needed to reproduce this fold's test split for attribution.
+        if save_weights:
+            ckpt_path = os.path.join(weights_dir, f"crew_seed{seed}_fold{fold}.pt")
+            torch.save(
+                {
+                    "state_dict": model.state_dict(),
+                    "seed": seed,
+                    "fold": fold,
+                    "seq_in_channels": seq_in_channels,
+                    "exp_input_dim": exp_input_dim,
+                    "use_experimental": True,
+                    "test_idx": np.asarray(test_idx),
+                    "scaler_y_mean": scaler_y.mean_,
+                    "scaler_y_scale": scaler_y.scale_,
+                },
+                ckpt_path,
+            )
+            print(f"Saved fold weights -> {ckpt_path}")
+
+        # Integrated Gradients attribution on the fold's in-memory test set.
+        if attribution:
+            from modeling.model_attribution import ModelExplainer
+            from modeling.attribution_plots import save_all_attribution_plots
+
+            explainer = ModelExplainer(model, device=device)
+            attr = explainer.create_explainability_matrix(
+                test_loader, seq_channel_names=seq_channel_names, exp_feature_names=exp_feature_names,
+            )
+            prefix = os.path.join(attributions_dir, f"seed{seed}_fold{fold}")
+            explainer.save_attributions(attr, prefix)
+
+            fold_attr_seq.append(attr["seq_raw"])
+            fold_attr_exp.append(attr["exp"])
+            fold_X_seq.append(X_seq[test_idx])
+            fold_X_exp.append(X_exp[test_idx])
+            fold_sample_ids.extend(attr["sample_ids"])
+
+            plot_dir = os.path.join(
+                DEFAULT_ATTRIBUTION_PLOTS_DIR, "per_fold", f"seed{seed}_fold{fold}",
+            )
+            save_all_attribution_plots(
+                attr["seq_raw"], attr["exp"], X_seq[test_idx], X_exp[test_idx],
+                attr["sample_ids"], seq_channel_names, exp_feature_names, plot_dir,
+            )
+
+    # Pool fold test attributions into one dataset-wide map (each sample once).
+    if attribution and fold_attr_seq:
+        pooled_seq = np.concatenate(fold_attr_seq, axis=0)
+        pooled_exp = np.concatenate(fold_attr_exp, axis=0)
+        pooled_X_seq = np.concatenate(fold_X_seq, axis=0)
+        pooled_X_exp = np.concatenate(fold_X_exp, axis=0)
+
+        np.save(os.path.join(attributions_dir, "pooled_seq.npy"), pooled_seq)
+        pd.DataFrame(pooled_exp, index=fold_sample_ids, columns=exp_feature_names).to_csv(
+            os.path.join(attributions_dir, "pooled_exp.csv"),
+        )
+        print(f"Saved pooled attributions -> {attributions_dir}/pooled_seq.npy, pooled_exp.csv")
+
+        save_all_attribution_plots(
+            pooled_seq, pooled_exp, pooled_X_seq, pooled_X_exp, fold_sample_ids,
+            seq_channel_names, exp_feature_names,
+            os.path.join(DEFAULT_ATTRIBUTION_PLOTS_DIR, "pooled"),
+        )
 
     # 5. Aggregate
     print("\n=== Cross-validation summary ===")
@@ -124,11 +214,15 @@ def main():
     parser.add_argument("--patience", type=int, default=5)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max-rows", type=int, default=None, help="cap rows for a quick check")
+    parser.add_argument("--no-save-weights", action="store_true", help="do not save per-fold model weights")
+    parser.add_argument("--attribution", action="store_true",
+                        help="compute and save Integrated Gradients maps per fold")
     args = parser.parse_args()
 
     run_sequence_cnn_cv(cmsirna_path=args.cmsirna_path, historic_path=args.historic_path, n_splits=args.n_splits,
         leak_n=args.leak_n, val_split=args.val_split, batch_size=args.batch_size, lr=args.lr, epochs=args.epochs,
-        patience=args.patience, seed=args.seed, max_rows=args.max_rows, )
+        patience=args.patience, seed=args.seed, max_rows=args.max_rows, save_weights=not args.no_save_weights,
+        attribution=args.attribution)
 
 
 if __name__ == "__main__":
