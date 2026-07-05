@@ -195,16 +195,19 @@ def build_slice_embeddings(df, model=None, device="cpu", cache=None,
     slice_cols = ["mRNA_binding_slice", "mRNA_five_slice", "mRNA_three_slice"]
 
     all_slices = pd.concat([df[c] for c in slice_cols])
-    cache = embed_unique(
-        all_slices.tolist(), model, device, cache=cache, batch_size=batch_size,
-        save_every=save_every, cache_path=cache_path,
-    )
+    # with a model, embed any slice not yet cached. with model=None assemble from
+    # the cache only (the training env has no Orthrus installed), and a
+    # slice missing from the cache stays absent via the mask below
+    if model is not None:
+        cache = embed_unique(
+            all_slices.tolist(), model, device, cache=cache, batch_size=batch_size,
+            save_every=save_every, cache_path=cache_path,
+        )
 
     # Dimension is inferred from the checkpoint (512 for Orthrus v1 4-track).
     if not cache:
         raise ValueError("No valid mRNA slices were available to embed")
     dim = len(next(iter(cache.values())))
-    zero = np.zeros(dim, dtype=np.float32)
 
     n = len(df)
     x_mrna = np.zeros((n, 3, dim), dtype=np.float32)
@@ -214,8 +217,9 @@ def build_slice_embeddings(df, model=None, device="cpu", cache=None,
     mask = np.zeros((n, 3), dtype=bool)
     for j, col in enumerate(slice_cols):
         for i, s in enumerate(df[col].tolist()):
-            if isinstance(s, str):
-                x_mrna[i, j] = cache.get(s, zero)
+            # present only if actually embedded
+            if isinstance(s, str) and s in cache:
+                x_mrna[i, j] = cache[s]
                 mask[i, j] = True
 
     return x_mrna, mask, cache
