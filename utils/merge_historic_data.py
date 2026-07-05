@@ -8,6 +8,15 @@ Date     : 2026/06/13
 import pandas as pd
 
 
+def unmodified_annotation(seq):
+    """per-position annotation for an unmodified strand, like a patent that lists every
+    base. the chemistry encoder then reads it as RNA.
+    """
+    if not isinstance(seq, str):
+        return None
+    return " || ".join(f"{i + 1}*{base}" for i, base in enumerate(seq))
+
+
 def align_historic_to_cmsirna(path):
     """Reads the historic dataset and renames its columns to the CMsiRNAdb ones.  
     These siRNAs are unmodified, so the modification columns are left out and the chemistry
@@ -16,8 +25,10 @@ def align_historic_to_cmsirna(path):
 
     cmsirna = pd.DataFrame({
         "gene_target_symbol_name": historic["gene_target_symbol_name"],
-        "Antisense_seqence": historic["siRNA_guide"], 
-        "Sense_seqence": historic["siRNA_passenger"], 
+        "Antisense_seqence": historic["siRNA_guide"],
+        "Sense_seqence": historic["siRNA_passenger"],
+        "Modification_Types_Antisense_strand": historic["siRNA_guide"].map(unmodified_annotation),
+        "Modification_Types_Sense_strand": historic["siRNA_passenger"].map(unmodified_annotation),
         "Cell_Type": historic["cell_line_donor"],
         "Concentration": historic["siRNA_concentration"].astype(str) + historic["concentration_unit"],
         "Time_of_administration": historic["Duration_after_transfection_h"].astype(str) + "h",
