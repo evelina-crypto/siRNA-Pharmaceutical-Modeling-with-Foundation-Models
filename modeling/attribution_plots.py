@@ -15,19 +15,41 @@ import seaborn as sns
 FIG_DPI = 300
 BLOCKS = ("seq", "acid", "sugar", "linker")
 STRANDS = ("Sense", "Antisense")
-
-# Single-letter glyphs on the logo axis; legend uses full token names.
+# Single-letter glyphs on the logo axis; legend uses LEGEND_LABELS for display.
 LOGO_LETTERS = {
     "seq": {},
     "acid": {"RNA": "R", "DNA": "D", "GNA": "G", "UNA": "U", "LNA": "L", "Unknown": "?"},
     "sugar": {
-        "Unmodified": ".", "2'-OMe": "O", "2'-F": "F", "2'-M": "M", "2'-OHe": "H",
-        "2'-P": "P", "Abasic": "#", "2'-F-4'-Thio": "T", "Unknown": "?",
+        "Unmodified": "U", "2'-OMe": "O", "2'-F": "F", "2'-M": "M", "2'-OHe": "H",
+        "2'-P": "P", "Abasic": "A", "2'-F-4'-Thio": "T", "Unknown": "?",
     },
     "linker": {
-        "Normal": "o", "PS": "s", "VP": "v", "Both_VP_PS": "b",
-        "Phosphonate": "p", "Unknown": "?",
+        "Normal": "O", "PS": "S", "VP": "V", "Both_VP_PS": "B",
+        "Phosphonate": "P", "Unknown": "?",
     },
+}
+
+# Human-readable labels for plot legends; keys must match ChemistryEncoder category strings.
+LEGEND_LABELS = {
+    "RNA": "RNA",
+    "DNA": "DNA (deoxy)",
+    "GNA": "Glycol nucleic acid (GNA)",
+    "UNA": "Unlocked nucleic acid (UNA)",
+    "LNA": "Locked nucleic acid (LNA)",
+    "Unknown": "Unknown",
+    "Unmodified": "Unmodified ribose",
+    "2'-OMe": "2'-O-methyl",
+    "2'-F": "2'-Fluoro",
+    "2'-M": "2'-Methoxy",
+    "2'-OHe": "2'-O-hexadecyl",
+    "2'-P": "2'-Phosphate",
+    "Abasic": "Abasic site",
+    "2'-F-4'-Thio": "2'-Fluoro-4'-Thio",
+    "Normal": "Normal phosphate",
+    "PS": "Phosphorothioate",
+    "VP": "Vinyl phosphonate",
+    "Both_VP_PS": "Phosphorothioate + Vinyl",
+    "Phosphonate": "Phosphonate",
 }
 
 LOGO_COLOR_SCHEMES = {
@@ -37,12 +59,12 @@ LOGO_COLOR_SCHEMES = {
         "L": "#9467bd", "?": "#7f7f7f",
     },
     "sugar": {
-        ".": "#8c564b", "O": "#e377c2", "F": "#17becf", "M": "#bcbd22",
-        "H": "#aec7e8", "P": "#ffbb78", "#": "#98df8a", "T": "#c5b0d5", "?": "#7f7f7f",
+        "U": "#8c564b", "O": "#e377c2", "F": "#17becf", "M": "#bcbd22",
+        "H": "#aec7e8", "P": "#ffbb78", "A": "#98df8a", "T": "#c5b0d5", "?": "#7f7f7f",
     },
     "linker": {
-        "o": "#393b79", "s": "#637939", "v": "#8c6d31", "b": "#843c39",
-        "p": "#7b4173", "?": "#7f7f7f",
+        "O": "#393b79", "S": "#637939", "V": "#8c6d31", "B": "#843c39",
+        "P": "#7b4173", "?": "#7f7f7f",
     },
 }
 
@@ -51,6 +73,18 @@ def _logo_glyph(block, category):
     if block == "seq":
         return category
     return LOGO_LETTERS[block].get(category, "?")
+
+
+def _display_label(category):
+    return LEGEND_LABELS.get(category, category)
+
+
+def _display_channel_name(channel_name):
+    parts = channel_name.split("_", 2)
+    if len(parts) < 3:
+        return channel_name
+    strand, block, category = parts
+    return f"{strand}_{block}_{_display_label(category)}"
 
 
 def parse_channel_index(seq_channel_names):
@@ -130,7 +164,9 @@ def plot_sequence_logo(matrix, categories, block, strand, out_path):
     ax.set_ylabel("Mean attribution (freq-weighted)")
     ax.set_title(f"{strand} {block} attribution logo")
 
-    legend_text = "\n".join(f"{_logo_glyph(block, c)} = {c}" for c in categories)
+    legend_text = "\n".join(
+        f"{_logo_glyph(block, c)} = {_display_label(c)}" for c in categories
+    )
     ax.text(1.02, 0.5, legend_text, transform=ax.transAxes, fontsize=7,
             verticalalignment="center", family="monospace")
     _save_fig(out_path)
@@ -209,7 +245,8 @@ def plot_positional_antisense_all_blocks(seq_raw, seq_channel_names, out_dir):
 def plot_channel_importance(seq_raw, seq_channel_names, out_dir):
     """Bar chart of mean |attr| per channel."""
     mean_abs = np.abs(seq_raw).mean(axis=(0, 2))
-    df = pd.DataFrame({"channel": seq_channel_names, "importance": mean_abs})
+    display_names = [_display_channel_name(n) for n in seq_channel_names]
+    df = pd.DataFrame({"channel": display_names, "importance": mean_abs})
     df["block"] = df["channel"].str.split("_").str[1]
 
     fig, ax = plt.subplots(figsize=(14, 5))
