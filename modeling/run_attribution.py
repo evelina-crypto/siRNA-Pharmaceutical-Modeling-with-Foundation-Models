@@ -18,7 +18,7 @@ import pandas as pd
 import torch
 from torch.utils.data import DataLoader
 
-from modeling.attribution_plots import save_all_attribution_plots
+from modeling.attribution_plots import save_all_attribution_plots, save_cross_fold_plots
 from modeling.crew_model import CrewSiRNAModel
 from modeling.model_attribution import ModelExplainer
 from modeling.multi_input_training_utils import IndexedMultiTensorDataset
@@ -64,11 +64,11 @@ def _attribution_for_fold(model, test_loader, X_seq_test, X_exp_test, seq_channe
     explainer.save_attributions(attr, prefix)
 
     plot_dir = os.path.join(DEFAULT_ATTRIBUTION_PLOTS_DIR, "per_fold", f"seed{seed}_fold{fold}")
-    save_all_attribution_plots(
+    axis_limits = save_all_attribution_plots(
         attr["seq_raw"], attr["exp"], X_seq_test, X_exp_test,
         attr["sample_ids"], seq_channel_names, exp_feature_names, plot_dir,
     )
-    return attr
+    return attr, axis_limits
 
 
 def _pool_and_save_attributions(fold_attrs, fold_X_seq, fold_X_exp, fold_sample_ids,
@@ -116,7 +116,7 @@ def run_attribution_from_weights(cmsirna_path=DEFAULT_CMSIRNA_PATH, historic_pat
           f"seq channels: {X_seq.shape[1]}, exp dim: {X_exp.shape[1]}")
 
     os.makedirs(attributions_dir, exist_ok=True)
-    fold_attrs, fold_X_seq, fold_X_exp, fold_sample_ids = [], [], [], []
+    fold_attrs, fold_X_seq, fold_X_exp, fold_sample_ids, fold_axis_limits = [], [], [], [], []
 
     for fold in range(n_splits):
         ckpt_path = os.path.join(weights_dir, f"crew_seed{seed}_fold{fold}.pt")
@@ -145,7 +145,7 @@ def run_attribution_from_weights(cmsirna_path=DEFAULT_CMSIRNA_PATH, historic_pat
         )
         test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False)
 
-        attr = _attribution_for_fold(
+        attr, axis_limits = _attribution_for_fold(
             model, test_loader, X_seq[test_idx], X_exp[test_idx],
             seq_channel_names, exp_feature_names, seed, fold, device, attributions_dir,
         )
@@ -153,8 +153,18 @@ def run_attribution_from_weights(cmsirna_path=DEFAULT_CMSIRNA_PATH, historic_pat
         fold_X_seq.append(X_seq[test_idx])
         fold_X_exp.append(X_exp[test_idx])
         fold_sample_ids.extend(attr["sample_ids"])
+        fold_axis_limits.append(axis_limits)
 
     if fold_attrs:
+        save_cross_fold_plots(
+            [a["seq_raw"] for a in fold_attrs],
+            [a["exp"] for a in fold_attrs],
+            fold_X_seq, fold_X_exp,
+            seq_channel_names, exp_feature_names,
+            os.path.join(DEFAULT_ATTRIBUTION_PLOTS_DIR, "cross_fold"),
+            n_splits=n_splits,
+            fold_axis_limits=fold_axis_limits,
+        )
         _pool_and_save_attributions(
             fold_attrs, fold_X_seq, fold_X_exp, fold_sample_ids,
             seq_channel_names, exp_feature_names, attributions_dir,
