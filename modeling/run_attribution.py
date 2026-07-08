@@ -4,7 +4,8 @@ Comments : Integrated Gradients attribution for the CrewSiRNAModel from saved
            per-fold checkpoints (results/weights/crew_seed{seed}_fold{fold}.pt).
            Reloads the dataset with the same preprocessing as training, indexes
            each fold's test set via checkpoint test_idx, and writes per-fold and
-           pooled attribution arrays + plots.
+           pooled attribution arrays + plots under --attributions-dir (plots in
+           <attributions-dir>/attribution_plots/).
 
            Must use the same --cmsirna-path, --historic-path, --seed, and
            --max-rows as the training run that produced the checkpoints.
@@ -32,7 +33,10 @@ DEFAULT_HISTORIC_PATH = os.path.join(REPO_ROOT, "dataset", "Historic_Takayuki_hu
 DEFAULT_RESULTS_DIR = os.path.join(REPO_ROOT, "results")
 DEFAULT_WEIGHTS_DIR = os.path.join(DEFAULT_RESULTS_DIR, "weights")
 DEFAULT_ATTRIBUTIONS_DIR = os.path.join(DEFAULT_RESULTS_DIR, "attributions")
-DEFAULT_ATTRIBUTION_PLOTS_DIR = os.path.join(DEFAULT_ATTRIBUTIONS_DIR, "attribution_plots")
+
+
+def _attribution_plots_dir(attributions_dir):
+    return os.path.join(attributions_dir, "attribution_plots")
 
 
 def _load_crew_data(cmsirna_path, historic_path, seed=42, max_rows=None):
@@ -54,7 +58,8 @@ def _load_crew_data(cmsirna_path, historic_path, seed=42, max_rows=None):
 
 
 def _attribution_for_fold(model, test_loader, X_seq_test, X_exp_test, seq_channel_names,
-                          exp_feature_names, seed, fold, device, attributions_dir):
+                          exp_feature_names, seed, fold, device, attributions_dir,
+                          attribution_plots_dir):
     """Compute IG attributions_arch, save arrays, and write per-fold plots."""
     explainer = ModelExplainer(model, device=device)
     attr = explainer.create_explainability_matrix(
@@ -63,7 +68,7 @@ def _attribution_for_fold(model, test_loader, X_seq_test, X_exp_test, seq_channe
     prefix = os.path.join(attributions_dir, f"seed{seed}_fold{fold}")
     explainer.save_attributions(attr, prefix)
 
-    plot_dir = os.path.join(DEFAULT_ATTRIBUTION_PLOTS_DIR, "per_fold", f"seed{seed}_fold{fold}")
+    plot_dir = os.path.join(attribution_plots_dir, "per_fold", f"seed{seed}_fold{fold}")
     axis_limits = save_all_attribution_plots(
         attr["seq_raw"], attr["exp"], X_seq_test, X_exp_test,
         attr["sample_ids"], seq_channel_names, exp_feature_names, plot_dir,
@@ -72,10 +77,19 @@ def _attribution_for_fold(model, test_loader, X_seq_test, X_exp_test, seq_channe
 
 
 def _pool_and_save_attributions(fold_attrs, fold_X_seq, fold_X_exp, fold_sample_ids,
-                                seq_channel_names, exp_feature_names, attributions_dir):
-    """Concatenate per-fold test attributions_arch and write pooled arrays + plots."""
-    pooled_seq = np.concatenate([a["seq_raw"] for a in fold_attrs], axis=0)
-    pooled_exp = np.concatenate([a["exp"] for a in fold_attrs], axis=0)
+                                seq_channel_names, exp_feature_names, attributions_dir,
+                                attribution_plots_dir, fold_scales):
+    """Concatenate per-fold test attributions_arch and write pooled arrays + plots.
+
+    Each fold is a different model trained on its own per-fold target StandardScaler,
+    so raw IG magnitudes are not comparable across folds. Multiplying a fold's
+    attributions by that fold's scaler_y_scale converts them from standardized-target
+    units back to physical inhibition-percentage units -> plots comparable across folds. Signs are preserved.
+    """
+    pooled_seq = np.concatenate(
+        [a["seq_raw"] * s for a, s in zip(fold_attrs, fold_scales)], axis=0)
+    pooled_exp = np.concatenate(
+        [a["exp"] * s for a, s in zip(fold_attrs, fold_scales)], axis=0)
     pooled_X_seq = np.concatenate(fold_X_seq, axis=0)
     pooled_X_exp = np.concatenate(fold_X_exp, axis=0)
 
@@ -83,12 +97,13 @@ def _pool_and_save_attributions(fold_attrs, fold_X_seq, fold_X_exp, fold_sample_
     pd.DataFrame(pooled_exp, index=fold_sample_ids, columns=exp_feature_names).to_csv(
         os.path.join(attributions_dir, "pooled_exp.csv"),
     )
-    print(f"Saved pooled attributions -> {attributions_dir}/pooled_seq.npy, pooled_exp.csv")
+    print(f"Saved pooled attributions (physical inhibition-% units) -> "
+          f"{attributions_dir}/pooled_seq.npy, pooled_exp.csv")
 
     save_all_attribution_plots(
         pooled_seq, pooled_exp, pooled_X_seq, pooled_X_exp, fold_sample_ids,
         seq_channel_names, exp_feature_names,
-        os.path.join(DEFAULT_ATTRIBUTION_PLOTS_DIR, "pooled"),
+        os.path.join(attribution_plots_dir, "pooled"),
     )
 
 
@@ -116,7 +131,9 @@ def run_attribution_from_weights(cmsirna_path=DEFAULT_CMSIRNA_PATH, historic_pat
           f"seq channels: {X_seq.shape[1]}, exp dim: {X_exp.shape[1]}")
 
     os.makedirs(attributions_dir, exist_ok=True)
+    attribution_plots_dir = _attribution_plots_dir(attributions_dir)
     fold_attrs, fold_X_seq, fold_X_exp, fold_sample_ids, fold_axis_limits = [], [], [], [], []
+    fold_scales = []
 
     for fold in range(n_splits):
         ckpt_path = os.path.join(weights_dir, f"crew_seed{seed}_fold{fold}.pt")
@@ -129,6 +146,7 @@ def run_attribution_from_weights(cmsirna_path=DEFAULT_CMSIRNA_PATH, historic_pat
         print(f"\n=== Attribution fold {fold + 1}/{n_splits} ===")
         ckpt = _load_checkpoint(ckpt_path)
         test_idx = np.asarray(ckpt["test_idx"])
+        scale = float(np.asarray(ckpt["scaler_y_scale"]).ravel()[0])
 
         model = CrewSiRNAModel(
             seq_in_channels=int(ckpt["seq_in_channels"]),
@@ -148,12 +166,14 @@ def run_attribution_from_weights(cmsirna_path=DEFAULT_CMSIRNA_PATH, historic_pat
         attr, axis_limits = _attribution_for_fold(
             model, test_loader, X_seq[test_idx], X_exp[test_idx],
             seq_channel_names, exp_feature_names, seed, fold, device, attributions_dir,
+            attribution_plots_dir,
         )
         fold_attrs.append(attr)
         fold_X_seq.append(X_seq[test_idx])
         fold_X_exp.append(X_exp[test_idx])
         fold_sample_ids.extend(attr["sample_ids"])
         fold_axis_limits.append(axis_limits)
+        fold_scales.append(scale)
 
     if fold_attrs:
         save_cross_fold_plots(
@@ -161,13 +181,14 @@ def run_attribution_from_weights(cmsirna_path=DEFAULT_CMSIRNA_PATH, historic_pat
             [a["exp"] for a in fold_attrs],
             fold_X_seq, fold_X_exp,
             seq_channel_names, exp_feature_names,
-            os.path.join(DEFAULT_ATTRIBUTION_PLOTS_DIR, "cross_fold"),
+            os.path.join(attribution_plots_dir, "cross_fold"),
             n_splits=n_splits,
             fold_axis_limits=fold_axis_limits,
         )
         _pool_and_save_attributions(
             fold_attrs, fold_X_seq, fold_X_exp, fold_sample_ids,
-            seq_channel_names, exp_feature_names, attributions_dir,
+            seq_channel_names, exp_feature_names, attributions_dir, attribution_plots_dir,
+            fold_scales,
         )
 
 
