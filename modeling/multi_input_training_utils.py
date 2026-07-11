@@ -37,25 +37,46 @@ class IndexedMultiTensorDataset(torch.utils.data.Dataset):
 
 
 def collate_runtime_slices(samples, width=100):
-    """Collate three raw RNA slices into a fixed ``(B, 3, 4, width)`` tensor."""
+    """Collate three raw RNA slices for runtime Orthrus.
+
+    When ``width`` is an integer, all slices must fit inside that fixed length
+    and are padded to ``(B, 3, 4, width)``. When ``width`` is ``None`` (used for
+    ``--three-prime-width full``), the batch is padded only to the longest slice
+    in that batch. Orthrus also receives the true sequence lengths, so the
+    right-side padding is not treated as real sequence.
+    """
     from utils.fm_utils import seq_to_one_hot
 
     X_seq, X_exp, slice_triplets, y, sample_ids = zip(*samples)
     batch_size = len(samples)
-    one_hot = torch.zeros(batch_size, 3, 4, width, dtype=torch.float32)
-    lengths = torch.ones(batch_size, 3, dtype=torch.long)
-    present_mask = torch.zeros(batch_size, 3, dtype=torch.bool)
 
-    for row, triplet in enumerate(slice_triplets):
-        for column, sequence in enumerate(triplet):
+    encoded_triplets = []
+    max_width = int(width) if width is not None else 1
+    for triplet in slice_triplets:
+        encoded_triplet = []
+        for sequence in triplet:
             if not isinstance(sequence, str) or not sequence:
+                encoded_triplet.append(None)
                 continue
             encoded = seq_to_one_hot(sequence)
             sequence_length = encoded.shape[1]
-            if sequence_length > width:
+            if width is not None and sequence_length > width:
                 raise ValueError(
                     f"Runtime slice length {sequence_length} exceeds fixed width {width}"
                 )
+            max_width = max(max_width, sequence_length)
+            encoded_triplet.append(encoded)
+        encoded_triplets.append(encoded_triplet)
+
+    one_hot = torch.zeros(batch_size, 3, 4, max_width, dtype=torch.float32)
+    lengths = torch.ones(batch_size, 3, dtype=torch.long)
+    present_mask = torch.zeros(batch_size, 3, dtype=torch.bool)
+
+    for row, encoded_triplet in enumerate(encoded_triplets):
+        for column, encoded in enumerate(encoded_triplet):
+            if encoded is None:
+                continue
+            sequence_length = encoded.shape[1]
             one_hot[row, column, :, :sequence_length] = torch.from_numpy(encoded)
             lengths[row, column] = sequence_length
             present_mask[row, column] = True
@@ -149,6 +170,9 @@ def train_model_multi(model, train_loader, val_loader, criterion, optimizer,
         if early_stopping.early_stop:
             print("Early stopping triggered")
             break
+
+    if early_stopping.restore_best_weights and early_stopping.best_weights is not None:
+        model.load_state_dict(early_stopping.best_weights)
 
     return model, history
 
@@ -271,6 +295,9 @@ def train_model_mrna(model, train_loader, val_loader, criterion, optimizer,
         if early_stopping.early_stop:
             print("Early stopping triggered")
             break
+
+    if early_stopping.restore_best_weights and early_stopping.best_weights is not None:
+        model.load_state_dict(early_stopping.best_weights)
 
     return model, history
 

@@ -38,8 +38,8 @@ def run_mrna_cv(cmsirna_path, historic_path, mrna_cache, n_splits=3, leak_n=0, v
 
     # enrich with add_mrna=True so the mRNA/UTR columns and the alignment site exist
     raw_df = load_merged_dataset(cmsirna_path, historic_path)
-    pipeline = SiRNADataPipeline(target_len=25)
-    enriched = pipeline.enrich_dataset_with_encodings(raw_df, strict_cleaning=False, add_mrna=True)
+    pipeline = SiRNADataPipeline(target_len=25, fetch_missing_mrna=True)
+    enriched = pipeline.enrich_dataset_with_encodings(raw_df, strict_cleaning=True, add_mrna=True)
     enriched = enriched.reset_index(drop=True)
 
     # sequence + experimental tensors (same rows, same order as enriched)

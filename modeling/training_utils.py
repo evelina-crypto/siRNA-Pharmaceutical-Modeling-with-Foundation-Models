@@ -143,6 +143,9 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, epochs=10
             print("Early stopping triggered")
             break
 
+    if early_stopping.restore_best_weights and early_stopping.best_weights is not None:
+        model.load_state_dict(early_stopping.best_weights)
+
     return model, history
 
 

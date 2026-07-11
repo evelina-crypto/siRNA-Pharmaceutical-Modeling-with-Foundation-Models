@@ -50,16 +50,21 @@ class MRNAFMEncoder(nn.Module):
 
 
 class RuntimeOrthrusEncoder(nn.Module):
-    """Run three fixed-length slices through a selectively unfrozen Orthrus.
+    """Run three mRNA slices through a selectively unfrozen Orthrus.
 
     ``packed_slices`` contains ``(one_hot, lengths, present_mask)`` with shapes
-    ``(B, 3, 4, L)``, ``(B, 3)``, and ``(B, 3)``. The three 512-dimensional
-    representations and three presence flags are projected to the Crew mRNA
-    branch dimension.
+    ``(B, 3, 4, L)``, ``(B, 3)``, and ``(B, 3)``.
+
+    Keep this runtime head aligned with ``MRNAFMEncoder``: each Orthrus region
+    representation gets its own projection, then the projected regions are
+    concatenated. With frozen Orthrus, this makes runtime and static Orthrus
+    differ mainly in when the embeddings are computed, not in the mRNA-head
+    architecture.
     """
 
     def __init__(self, model_dir, checkpoint_name, embedding_dim=64,
-                 unfreeze_last_n=1):
+                 unfreeze_last_n=1, n_regions=3, dropout=0.3,
+                 activation=nn.ReLU):
         super().__init__()
         from utils.fm_utils import load_orthrus
 
@@ -82,7 +87,13 @@ class RuntimeOrthrusEncoder(nn.Module):
                 parameter.requires_grad = True
 
         representation_dim = self.backbone.embedding.out_features
-        self.net = nn.Linear(3 * representation_dim + 3, embedding_dim)
+        self.region_proj = nn.ModuleList(
+            [nn.Linear(representation_dim, embedding_dim) for _ in range(n_regions)]
+        )
+        self.activation = activation()
+        self.dropout = nn.Dropout(dropout)
+        self.out_dim = embedding_dim * n_regions
+        self.n_regions = n_regions
         self.unfreeze_last_n = unfreeze_last_n
 
     def forward(self, packed_slices, mask=None):
@@ -101,10 +112,13 @@ class RuntimeOrthrusEncoder(nn.Module):
             )
         representations = representations.reshape(batch_size, slice_count, -1)
         representations = representations * present_mask.unsqueeze(-1)
-        features = torch.cat(
-            [representations.flatten(start_dim=1), present_mask.float()], dim=1,
-        )
-        return self.net(features)
+
+        parts = []
+        for j, proj in enumerate(self.region_proj):
+            region = self.dropout(self.activation(proj(representations[:, j, :])))
+            region = region * present_mask[:, j].unsqueeze(1)
+            parts.append(region)
+        return torch.cat(parts, dim=1)
 
 
 class CrewSiRNAModel(nn.Module):
@@ -147,8 +161,11 @@ class CrewSiRNAModel(nn.Module):
                 checkpoint_name=orthrus_checkpoint,
                 embedding_dim=mrna_embedding_dim,
                 unfreeze_last_n=orthrus_unfreeze_last_n,
+                n_regions=mrna_n_regions,
+                dropout=dropout,
+                activation=activation,
             )
-            fused_dim += mrna_embedding_dim
+            fused_dim += self.mrna_encoder.out_dim
         elif mrna_embedding_dim > 0 and mrna_input_dim is not None:
             self.mrna_encoder = MRNAFMEncoder(
                 input_dim=mrna_input_dim, embedding_dim=mrna_embedding_dim,
