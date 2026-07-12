@@ -80,26 +80,53 @@ class DataCleaner:
         self.file = self.file.drop(columns=present)
         print(f"dropped {len(present)} columns: {present}")
 
-    def drop_rows(self):
-        """Drops in-vivo, mM, above 200 nM, unknown/RGA cell lines,
-        and out-of-range inhibition. NaN conc rows are handled separately
-        in drop_missing_concentration."""
+    def _drop_mask(self, mask: pd.Series, reason: str):
+        """Drops rows matching a mask and logs a step-specific count."""
+        removed = int(mask.sum())
+        self.file = self.file.loc[~mask].copy()
+        print(f"dropped {removed} rows for {reason}")
+
+    def drop_in_vivo_readings(self):
+        """Drops mg/kg dose rows and whole-animal model rows."""
         conc = self.file["Concentration"].fillna("").str.lower()
         cells = self.file["Cell_Type"].fillna("").str.strip().str.lower()
-        inhibition = pd.to_numeric(self.file["Inhibition"], errors="coerce")
-
         animal = cells.str.contains("|".join(self.animal_terms)) & ~cells.str.contains("primary")
         in_vivo = conc.str.contains("mg") | animal     # mg/kg dose or a live animal
-        mM_dose = conc.str.contains("mm")              # mM is not a real siRNA concentration
-        over_200nM = self.file["Concentration_nM"] > 200
-        unwanted = cells.isin(["unknown cell line", "rga cell"])
-        out_of_range = ~inhibition.between(-100, 100)
+        self._drop_mask(in_vivo, "in-vivo readings")
 
-        keep = ~(in_vivo | mM_dose | over_200nM | unwanted | out_of_range)
-        print(f"dropped {len(self.file) - keep.sum()} rows "
-              f"(in-vivo {in_vivo.sum()}, mM {mM_dose.sum()}, conc>200 {over_200nM.sum()}, "
-              f"cell {unwanted.sum()}, inhibition {out_of_range.sum()})")
-        self.file = self.file[keep].copy()
+    def drop_mM_readings(self):
+        """Drops rows reported in mM."""
+        conc = self.file["Concentration"].fillna("").str.lower()
+        mM_dose = conc.str.contains("mm")              # mM is not a real siRNA concentration
+        self._drop_mask(mM_dose, "mM readings")
+
+    def drop_high_concentration(self, to: float = 200):
+        """Drops rows above the maximum supported nM concentration."""
+        over_200nM = self.file["Concentration_nM"] > to
+        self._drop_mask(over_200nM, f"concentration > {to} nM")
+
+    def drop_unwanted_cell_lines(self):
+        """Drops rows with unknown or out-of-scope cell labels."""
+        cells = self.file["Cell_Type"].fillna("").str.strip().str.lower()
+        unwanted = cells.isin(["unknown cell line", "rga cell"])
+        self._drop_mask(unwanted, "unknown or unwanted cell lines")
+
+    def drop_out_of_range_inhibition(self, start: float = -100, to: float = 100):
+        """Drops rows where inhibition is outside the retained modeling range."""
+        inhibition = pd.to_numeric(self.file["Inhibition"], errors="coerce")
+        out_of_range = ~inhibition.between(start, to)
+        self._drop_mask(out_of_range, f"inhibition outside [{start}, {to}]")
+
+    def drop_rows(self):
+        """Drops out-of-scope rows for modeling with step-specific logs.
+
+        NaN concentration rows are handled separately in drop_missing_concentration.
+        """
+        self.drop_in_vivo_readings()
+        self.drop_mM_readings()
+        self.drop_high_concentration(to=200)
+        self.drop_unwanted_cell_lines()
+        self.drop_out_of_range_inhibition(start=-100, to=100)
 
     def drop_missing_concentration(self):
         """Drops NaN concentration. If you want to keep NaN values, set drop_missing_conc=False in clean()."""
