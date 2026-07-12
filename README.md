@@ -33,9 +33,18 @@ The mRNA branch uses embeddings from Orthrus, an RNA foundation model. You only 
 `build_orthrus_cache`. It needs a GPU and mamba-ssm, so it lives in its own
 environment (see the notes in `fm_utils.py`). After the cache exists, training and attribution just read it and do not need Orthrus installed.
 
-ToDo: explain paths to datasets
+## Data
 
-## Running it
+Download the two datasets into the `data/`folder:
+
+- `data/CMsiRNA_data_update.tsv`: the primary dataset, exported from CMsiRNAdb, a
+  database of chemically modified siRNAs and their measured silencing efficiency, curated from public patents. Get it from CMsiRNAdb (see references).
+
+- `data/Historic_Takayuki_hueskan_ichihara.csv`: an older, unmodified-siRNA dataset. It combines the classic Huesken, Takayuki and Ichihara siRNA knockdown datasets. The original data come from their source papers (see references).
+
+Every command below takes `--cmsirna-path` and `--historic-path`.
+
+## Running
 
 Train the sequence + experimental model with grouped cross-validation by gene:
 
@@ -79,3 +88,16 @@ Attribution of the mRNA branch (how much each branch and each mRNA region the mo
 python -m modeling.mRNA_attributions.run_mrna_attribution --save-dir results/orthrus_static
 python -m modeling.mRNA_attributions.plot_mrna_attribution --save-dir results/orthrus_static
 ```
+
+## References
+
+Data
+
+- CMsiRNAdb: a database of chemically modified siRNA silencing efficiency for nucleic acid drug design. BMC Bioinformatics, 2025. https://doi.org/10.1186/s12859-025-06359-y
+- Huesken et al. Design of a genome-wide siRNA library using an artificial neural network. Nature Biotechnology, 23(8):995–1001, 2005. https://doi.org/10.1038/nbt1118
+- Katoh and Suzuki. Specific residues at every third position of siRNA shape its efficient RNAi activity. Nucleic Acids Research, 35(4):e27, 2007. https://doi.org/10.1093/nar/gkl1120 (the "Takayuki" dataset, after first author Takayuki Katoh)
+- Ichihara et al. Thermodynamic instability of siRNA duplex is a prerequisite for dependable prediction of siRNA activities (i-Score). Nucleic Acids Research, 35(18):e123, 2007. https://doi.org/10.1093/nar/gkm699
+
+Foundation model
+
+- Fradkin et al. Orthrus: toward evolutionary and functional RNA foundation models. Nature Methods, 2026 (bioRxiv 2024). https://www.nature.com/articles/s41592-026-03064-3
